@@ -11,20 +11,30 @@ changed in one edit.
 Two distinct state machines live here:
 
   ReviewTask.status   PENDING -> APPROVED | REJECTED | CHANGES_REQUESTED
+                                    ^                    |
+                                    `---- resubmit -------+   (only for this one)
 
   Application.status  DRAFT -> SUBMITTED -> UNDER_REVIEW -> APPROVED
-                                                 |        -> REJECTED
-                                                 `--------> CHANGES_REQUESTED
+                            ^                  |        -> REJECTED
+                            |                  `--------> CHANGES_REQUESTED
+                            `--------- resubmit --------'
 
 The application status is *derived* from its review tasks rather than set
 independently. That is the only arrangement in which "Approved only when every
 required agency has approved it" holds without every caller remembering to
 check the others.
+
+Resubmission is the one transition that runs *backwards*, and it is selective on
+purpose. An agency that already approved said what it wanted; making the
+organizer earn that approval a second time would be wasteful and would lose the
+fact that the agency had already signed off. So only the agencies that actually
+asked for changes go back to Pending, and their previous decision is preserved
+in the audit trail rather than erased.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
 from app.models import ApplicationStatus, ReviewStatus
 
@@ -74,6 +84,37 @@ REVIEWABLE_APPLICATION_STATUSES: frozenset[ApplicationStatus] = frozenset(
 # a Pending task, because "Rejected if any agency rejects it" has no reversal.
 FINAL_APPLICATION_STATUSES: frozenset[ApplicationStatus] = frozenset(
     {ApplicationStatus.APPROVED, ApplicationStatus.REJECTED}
+)
+
+# ---------------------------------------------------------------------------
+# Resubmission
+# ---------------------------------------------------------------------------
+
+# The only state an organizer can resubmit from. A draft has nothing to
+# resubmit; Submitted and Under Review are still with the agencies; Approved and
+# Rejected are settled.
+RESUBMITTABLE_APPLICATION_STATUSES: frozenset[ApplicationStatus] = frozenset(
+    {ApplicationStatus.CHANGES_REQUESTED}
+)
+
+# The only review status that goes back to Pending on resubmission.
+#
+# Deliberately not "everything except Approved": an agency that asked for
+# changes must look at the corrected application, whereas an agency that already
+# approved has nothing outstanding and should not be asked again. Rejected is
+# excluded for the same reason Approved is preserved — reopening a rejection
+# would silently overturn a decision, and "Rejected if any agency rejects it" has
+# no reversal.
+RESETTABLE_REVIEW_STATUSES: frozenset[ReviewStatus] = frozenset(
+    {ReviewStatus.CHANGES_REQUESTED}
+)
+
+# Statuses an application must be in for an organizer to edit it. A draft is the
+# normal case; a changes-requested application is back with the organizer
+# precisely so they can fix it. Everything else is either with the agencies or
+# settled.
+EDITABLE_APPLICATION_STATUSES: frozenset[ApplicationStatus] = frozenset(
+    {ApplicationStatus.DRAFT, ApplicationStatus.CHANGES_REQUESTED}
 )
 
 
@@ -169,3 +210,77 @@ def application_status_changed(
 ) -> bool:
     """Whether a recomputed status actually differs from what was stored."""
     return previous is not new
+
+
+# ---------------------------------------------------------------------------
+# Organizer actions: edit and resubmit
+# ---------------------------------------------------------------------------
+
+
+def assert_application_editable(status: ApplicationStatus) -> None:
+    """
+    Refuse an edit to an application that is not the organizer's to change.
+
+    The two editable states are Draft (never submitted) and Changes Requested
+    (sent back to the organizer to be corrected). Submitted and Under Review are
+    with the agencies: an edit there would change what they are reviewing without
+    triggering a new review, and would make their recorded decision a statement
+    about a document that no longer exists. Approved and Rejected are settled.
+    """
+    if status not in EDITABLE_APPLICATION_STATUSES:
+        raise InvalidStatusTransition(
+            f"An application that is {ApplicationStatus(status).value} cannot be "
+            f"edited; expected one of "
+            f"{', '.join(sorted(ApplicationStatus(s).value for s in EDITABLE_APPLICATION_STATUSES))}"
+        )
+
+
+def assert_application_resubmittable(status: ApplicationStatus) -> None:
+    """
+    Refuse a resubmission of an application that is not awaiting corrections.
+
+    Changes Requested is the only state that means "the organizer has work to do
+    and the agencies are waiting". Allowing this from Submitted or Under Review
+    would let an organizer reset Pending review tasks without any agency having
+    asked for it.
+    """
+    if status not in RESUBMITTABLE_APPLICATION_STATUSES:
+        raise InvalidStatusTransition(
+            f"An application that is {ApplicationStatus(status).value} cannot be "
+            f"resubmitted; it must be "
+            f"{ApplicationStatus.CHANGES_REQUESTED.value} first"
+        )
+
+
+def should_reset_on_resubmission(status: ReviewStatus) -> bool:
+    """
+    Whether a review task goes back to Pending when the application is resubmitted.
+
+    Only the agencies that requested changes. An approval already given stands,
+    and a rejection is never reopened.
+    """
+    return ReviewStatus(status) in RESETTABLE_REVIEW_STATUSES
+
+
+def resubmission_application_status(
+    task_statuses: Sequence[ReviewStatus],
+) -> ApplicationStatus:
+    """
+    The application status after a resubmission resets the changes-requested tasks.
+
+    Delegates to the same aggregation the reviewer path uses, so "approved only
+    when every required agency has approved it" cannot be true on one path and
+    false on the other.
+
+    With no rejected task and at least one reset to Pending, this resolves to
+    Submitted when every agency asked for changes (a clean restart) and to Under
+    Review when some agency already approved (that approval still stands, so the
+    application is not brand new). A rejected task cannot reach here — the
+    lifecycle has no path back from Rejected — but if one somehow existed, the
+    aggregate would still return Rejected rather than quietly reviving the
+    application.
+    """
+    statuses = [ReviewStatus(s) for s in task_statuses]
+    return aggregate_application_status(
+        statuses, current=ApplicationStatus.SUBMITTED
+    )

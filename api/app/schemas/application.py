@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -13,7 +14,8 @@ from pydantic import (
 )
 
 from app.core.routing import LARGE_EVENT_REQUIRED_AGENCY
-from app.models import ApplicationStatus, EventType
+from app.models import ApplicationStatus, EventType, ReviewStatus, ReviewTask
+from app.schemas.review import AuditEventResponse
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -103,6 +105,18 @@ class ApplicationUpdate(ApplicationWrite):
 
 
 class ApplicationResponse(ApplicationWrite):
+    """
+    An application as the organizer sees it, with per-agency review progress.
+
+    `reviews` is the tracking view: one entry per agency that was asked to
+    review, carrying that agency's decision and comment. It is an empty list for a
+    draft, which has not been submitted and therefore has no reviewers.
+
+    Included on create and submit responses too, where it is `[]`, so the shape
+    does not change between "just made it" and "fetched it" — a client can read
+    one response shape and never have to special-case a draft.
+    """
+
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
@@ -111,6 +125,68 @@ class ApplicationResponse(ApplicationWrite):
     tenant_id: uuid.UUID
     created_at: datetime
     updated_at: datetime
+    # Populated by the routes from `review_summaries(application.review_tasks)`.
+    # Declared as a plain field with an empty default rather than read off the
+    # ORM object, because the schema layer must not depend on the model layer.
+    reviews: list[AgencyReviewStatus] = Field(default_factory=list)
+
+
+class AgencyReviewStatus(BaseModel):
+    """
+    One agency's decision on an application, as the organizer sees it.
+
+    This is the per-agency progress view that makes tracking useful: the
+    organizer can see which agency has decided, which has not, and why, without
+    inferring any of it from the aggregate status.
+
+    Deliberately no reviewer identity. The brief asks for the agency's status,
+    its comment and timestamps; naming the individual who pressed the button is
+    not needed to act on the feedback and is a small privacy cost. The
+    application-level history carries `user_id` for anyone who genuinely needs
+    to audit a specific decision.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    agency_id: uuid.UUID
+    agency_name: str
+    review_status: ReviewStatus
+    # The agency's own words. Null while the task is still Pending.
+    comment: str | None = None
+    created_at: datetime
+    # Moves on every decision and on every resubmission reset, so a task that was
+    # sent back to an agency is visibly newer than the ones that were not.
+    updated_at: datetime
+
+
+def review_summaries(
+    tasks: Iterable[ReviewTask],
+) -> list[AgencyReviewStatus]:
+    """
+    Build the per-agency tracking entries for an application.
+
+    A function rather than a model property: the model layer should not import
+    the schema layer, and this needs the `agency` relationship eager-loaded to
+    name the agencies. Sorted by agency name so the tracking view has a stable
+    order across requests.
+
+    A task whose agency relationship is missing gets an empty name rather than
+    raising. That cannot happen through the API — the FK guarantees an agency
+    exists — but a tracking view that 500s on unexpected data would hide the rest
+    of the application.
+    """
+    summaries = [
+        AgencyReviewStatus(
+            agency_id=task.agency_id,
+            agency_name=task.agency.name if task.agency is not None else "",
+            review_status=task.status,
+            comment=task.comment,
+            created_at=task.created_at,
+            updated_at=task.updated_at,
+        )
+        for task in tasks
+    ]
+    return sorted(summaries, key=lambda s: (s.agency_name, str(s.agency_id)))
 
 
 class RequiredAgency(BaseModel):
@@ -137,6 +213,42 @@ class SubmitApplicationResponse(BaseModel):
     # Whether the "over 5,000 attendees" threshold was exceeded. Reported so the
     # extra Fire review is explainable to the organizer rather than mysterious.
     attendance_override_applied: bool = False
+
+
+class ResubmitApplicationResponse(BaseModel):
+    """
+    The result of resubmitting a corrected application.
+
+    Returns which agencies were asked to look again. That is the whole point of
+    the operation, so it is explicit rather than something the organizer has to
+    diff against the previous state to discover: an agency that had already
+    approved is absent from `reset_agencies`, and the organizer should be able to
+    see that without asking.
+    """
+
+    application: ApplicationResponse
+    # Agencies whose changes-requested task went back to Pending.
+    reset_agencies: list[RequiredAgency]
+    # Agencies whose approval was preserved and were not asked again.
+    preserved_agencies: list[RequiredAgency]
+    # Agencies that had not yet decided when the organizer resubmitted. Their
+    # task was already Pending and stays Pending; they are listed so the organizer
+    # knows the full audience, not just the part that moved.
+    still_pending_agencies: list[RequiredAgency]
+
+
+class ApplicationHistoryResponse(BaseModel):
+    """
+    An application's audit timeline for its organizer.
+
+    Separate from the reviewer-scoped history in `app.schemas.review`: that one
+    is gated on a review assignment, this one on ownership. Same table, same
+    rows, different question.
+    """
+
+    application_id: uuid.UUID
+    application_status: ApplicationStatus
+    events: list[AuditEventResponse]
 
 
 class SubmissionRequirementError(ValueError):

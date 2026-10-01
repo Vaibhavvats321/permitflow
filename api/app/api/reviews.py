@@ -96,6 +96,15 @@ _ACTION_TARGETS: dict[str, ReviewStatus] = {
 # approved" from "the permit is now approved" — different facts that happen to
 # coincide on the last vote.
 _AUDIT_DECISION_PREFIX = "review."
+# The enum *values* are display strings ("Changes Requested", with a space), so
+# the audit action is built from the enum member name instead. Lowercasing the
+# value would produce "review.changes requested" — an action name with a space in
+# it, which does not match the dotted convention the other actions follow.
+_AUDIT_DECISION_NAME = {
+    ReviewStatus.APPROVED: "approved",
+    ReviewStatus.REJECTED: "rejected",
+    ReviewStatus.CHANGES_REQUESTED: "changes_requested",
+}
 _AUDIT_APPLICATION_STATUS_CHANGE = "application.status_changed"
 
 
@@ -341,7 +350,7 @@ def decide_review_task(
             tenant_id=application.tenant_id,
             user_id=current_user.id,
             agency_id=task.agency_id,
-            action=f"{_AUDIT_DECISION_PREFIX}{target.value.lower()}",
+            action=f"{_AUDIT_DECISION_PREFIX}{_AUDIT_DECISION_NAME[target]}",
             old_status=old_review_status.value,
             new_status=target.value,
             comment=payload.comment,

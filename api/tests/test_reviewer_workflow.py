@@ -835,11 +835,16 @@ def test_application_status_change_writes_a_second_audit_event(
             AuditEvent.application_id == application_id,
             AuditEvent.action == "application.status_changed",
         )
+        .order_by(AuditEvent.created_at.asc(), AuditEvent.id.asc())
         .all()
     )
-    assert len(events) == 1
-    assert events[0].old_status == ApplicationStatus.SUBMITTED.value
-    assert events[0].new_status == ApplicationStatus.UNDER_REVIEW.value
+    # Two: the Draft -> Submitted change on submit, then the one the approval
+    # caused.
+    assert len(events) == 2
+    assert events[0].old_status == ApplicationStatus.DRAFT.value
+    assert events[0].new_status == ApplicationStatus.SUBMITTED.value
+    assert events[1].old_status == ApplicationStatus.SUBMITTED.value
+    assert events[1].new_status == ApplicationStatus.UNDER_REVIEW.value
 
 
 def test_no_status_change_audit_event_when_status_holds(client: TestClient, db, tenant) -> None:
@@ -862,7 +867,9 @@ def test_no_status_change_audit_event_when_status_holds(client: TestClient, db, 
         )
         .count()
     )
-    assert count == 1  # Submitted -> Under Review, that one did change it.
+    # Draft -> Submitted on submit, then Submitted -> Under Review. Health
+    # approving changed nothing, so it added no third.
+    assert count == 2
 
 
 def test_rejected_action_writes_no_audit_event(client: TestClient, db, tenant) -> None:
@@ -907,14 +914,15 @@ def test_audit_timeline_is_readable_by_the_reviewer(client: TestClient, tenant) 
     assert body["application_status"] == ApplicationStatus.REJECTED.value
     actions = [e["action"] for e in body["events"]]
     assert actions == [
+        "application.status_changed",
         "review.approved",
         "application.status_changed",
         "review.rejected",
         "application.status_changed",
     ]
     # The comments travel with the history.
-    assert body["events"][0]["comment"] == "Police ok."
-    assert body["events"][2]["comment"] == "Sanitation inadequate."
+    assert body["events"][1]["comment"] == "Police ok."
+    assert body["events"][3]["comment"] == "Sanitation inadequate."
 
 
 def test_history_is_scoped_to_the_reviewers_agency(client: TestClient, tenant) -> None:
