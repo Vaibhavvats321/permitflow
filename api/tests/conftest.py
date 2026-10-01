@@ -137,6 +137,29 @@ class TenantFixture:
             else None
         )
 
+    def add_reviewer_for(
+        self,
+        agency_name: str,
+        suffix: str | None = None,
+    ) -> User:
+        """
+        Add a reviewer attached to a specific agency in this tenant.
+
+        Needed to test agency isolation within a city: RLS isolates tenants, so
+        two agencies in one tenant both pass the policy, and the reviewer's
+        queue has to be scoped by `agency_id` in the application.
+        """
+        agency = self.agencies[agency_name]
+        user = self._user(
+            f"{self.name.lower()}-{agency_name.lower()}"
+            f"{f'-{suffix}' if suffix else ''}-reviewer@example.com",
+            UserRole.AGENCY_REVIEWER,
+            hash_password(TEST_PASSWORD),
+            agency_id=agency.id,
+        )
+        self.session.commit()
+        return user
+
     def add_organizer(self, suffix: str = "second") -> User:
         """
         Add a second organizer to this tenant.

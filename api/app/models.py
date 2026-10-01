@@ -148,10 +148,22 @@ class AuditEvent(Base):
     __tablename__ = "audit_events"
     __table_args__ = (
         Index('ix_audit_events_application_id_created_at', 'application_id', 'created_at'),
+        # Supports "what has this agency decided" without scanning a tenant's
+        # whole timeline.
+        Index('ix_audit_events_agency_id_created_at', 'agency_id', 'created_at'),
     )
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     application_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("applications.id"))
     user_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("users.id"))
+    # Which agency acted, for reviewer decisions. Nullable because the timeline
+    # also records events with no agency behind them (submission, a future
+    # resubmission), and because rows written before this column existed have no
+    # value to backfill.
+    # Named to match the migration: an unnamed FK here makes `alembic check`
+    # report the same constraint as removed-and-re-added forever.
+    agency_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("agencies.id", name="fk_audit_events_agency_id", ondelete="RESTRICT")
+    )
     action: Mapped[str] = mapped_column(String(255))
     old_status: Mapped[Optional[str]] = mapped_column(String(255))
     new_status: Mapped[Optional[str]] = mapped_column(String(255))
