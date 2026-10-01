@@ -24,7 +24,10 @@ from app.core.config import settings
 from app.models import Base
 target_metadata = Base.metadata
 
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# Migrations must run as the schema owner, not as the application role: the app
+# role is intentionally unable to write rows outside its own tenant, and it
+# cannot own the SECURITY DEFINER login function.
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL_ADMIN)
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
