@@ -2018,6 +2018,168 @@ def test_admin_list_excludes_other_tenants_applications(
         assert app_b_id not in {app["id"] for app in body}
 
 
+def _create_draft(
+    client: TestClient,
+    tenant: TenantFixture,
+    *,
+    event_name: str,
+    location: str | None = None,
+    description: str | None = None,
+) -> str:
+    """File a draft carrying exactly the fields the admin search matches on."""
+    payload: dict = {
+        "event_name": event_name,
+        "event_type": EventType.CONCERT.value,
+    }
+    if location is not None:
+        payload["location"] = location
+    if description is not None:
+        payload["description"] = description
+    response = client.post(
+        "/applications",
+        json=payload,
+        headers=auth(tenant.token_for(tenant.organizer)),
+    )
+    assert response.status_code == 201
+    return response.json()["id"]
+
+
+def _admin_list(client: TestClient, tenant: TenantFixture, **params) -> list[dict]:
+    """GET the admin application list as the tenant's admin, with query params."""
+    response = client.get(
+        f"{ADMIN_PREFIX}/applications",
+        params=params,
+        headers=auth(tenant.token_for(tenant.admin)),
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+def test_admin_list_search_matches_name_location_and_description(
+    client: TestClient, make_tenant
+) -> None:
+    """`q` matches event name, location and description, case-insensitively."""
+    tenant = make_tenant("AdminSearchFieldsTenant")
+
+    with TestClient(app) as client:
+        _create_draft(
+            client,
+            tenant,
+            event_name="Harbor Music Festival",
+            location="Harbor Pavilion",
+            description="Waterfront stage programme",
+        )
+        _create_draft(
+            client,
+            tenant,
+            event_name="Winter Market",
+            location="Union Square",
+            description="Craft stalls and food trucks",
+        )
+
+        # Event name, in either letter case.
+        assert [
+            app["event_name"] for app in _admin_list(client, tenant, q="harbor music")
+        ] == ["Harbor Music Festival"]
+        assert [
+            app["event_name"] for app in _admin_list(client, tenant, q="HARBOR")
+        ] == ["Harbor Music Festival"]
+
+        # Location.
+        assert [
+            app["event_name"] for app in _admin_list(client, tenant, q="union square")
+        ] == ["Winter Market"]
+
+        # Description.
+        assert [
+            app["event_name"] for app in _admin_list(client, tenant, q="waterfront")
+        ] == ["Harbor Music Festival"]
+
+
+def test_admin_list_search_with_no_match_returns_empty(
+    client: TestClient, make_tenant
+) -> None:
+    """A term that matches nothing yields an empty array, not an error."""
+    tenant = make_tenant("AdminSearchNoMatchTenant")
+
+    with TestClient(app) as client:
+        _create_draft(client, tenant, event_name="Summer Fair")
+        assert _admin_list(client, tenant, q="no-such-event") == []
+
+
+def test_admin_list_search_with_blank_query_returns_everything(
+    client: TestClient, make_tenant
+) -> None:
+    """An absent, empty or whitespace-only `q` applies no filter at all."""
+    tenant = make_tenant("AdminSearchBlankTenant")
+
+    with TestClient(app) as client:
+        _create_draft(client, tenant, event_name="First Event")
+        _create_draft(client, tenant, event_name="Second Event")
+
+        assert len(_admin_list(client, tenant)) == 2
+        assert len(_admin_list(client, tenant, q="")) == 2
+        assert len(_admin_list(client, tenant, q="   ")) == 2
+
+
+def test_admin_list_search_is_scoped_to_the_admins_tenant(
+    client: TestClient, make_tenant
+) -> None:
+    """Search cannot reach another city's applications, even for the same name."""
+    tenant_a = make_tenant("AdminSearchScopeA")
+    tenant_b = make_tenant("AdminSearchScopeB")
+
+    with TestClient(app) as client:
+        own_id = _create_draft(client, tenant_a, event_name="Shared Carnival Name")
+        _create_draft(client, tenant_b, event_name="Shared Carnival Name")
+
+        results = _admin_list(client, tenant_a, q="carnival")
+        assert [app["id"] for app in results] == [own_id]
+
+
+def test_admin_list_search_combines_with_the_status_filter(
+    client: TestClient, make_tenant
+) -> None:
+    """`q` and `status` narrow the same query rather than overriding each other."""
+    tenant = make_tenant("AdminSearchCombinedTenant")
+
+    with TestClient(app) as client:
+        draft_id = _create_draft(client, tenant, event_name="Autumn Jazz Night")
+        submitted_id = _create_and_submit(client, tenant, "Autumn Fair Parade")
+
+        both = _admin_list(client, tenant, q="autumn")
+        assert {app["id"] for app in both} == {draft_id, submitted_id}
+
+        drafts = _admin_list(client, tenant, q="autumn", status="Draft")
+        assert [app["id"] for app in drafts] == [draft_id]
+
+        submitted = _admin_list(client, tenant, q="autumn", status="Submitted")
+        assert [app["id"] for app in submitted] == [submitted_id]
+
+
+def test_admin_list_search_treats_like_metacharacters_literally(
+    client: TestClient, make_tenant
+) -> None:
+    """`%` and `_` typed by a user are data, not wildcards."""
+    tenant = make_tenant("AdminSearchMetaTenant")
+
+    with TestClient(app) as client:
+        _create_draft(client, tenant, event_name="Century 100% Fun Run")
+        _create_draft(client, tenant, event_name="abc night market")
+
+        # A literal percent matches only the name that contains one; the
+        # wildcard reading would match both events.
+        assert [
+            app["event_name"] for app in _admin_list(client, tenant, q="%")
+        ] == ["Century 100% Fun Run"]
+        assert [
+            app["event_name"] for app in _admin_list(client, tenant, q="100%")
+        ] == ["Century 100% Fun Run"]
+
+        # An unescaped `_` would make "a_c" match "abc"; escaped, it does not.
+        assert _admin_list(client, tenant, q="a_c") == []
+
+
 def test_admin_applications_non_admin_forbidden(client: TestClient, make_tenant) -> None:
     """Organizer and Reviewer cannot read the admin application endpoints."""
     tenant = make_tenant("AdminAppsRoleTenant", with_reviewer=True)

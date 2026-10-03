@@ -195,6 +195,8 @@ export interface AdminApplicationHistoryResponse {
 /* --- Query parameters ----------------------------------------------------- */
 
 export interface ApplicationListParams {
+  /** Free-text search, matched by the server across the whole tenant. */
+  q?: string;
   status?: ApplicationStatus;
   event_type?: EventType;
   offset?: number;

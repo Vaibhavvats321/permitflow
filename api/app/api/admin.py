@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, UTC
 from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from app.deps import CurrentUser, get_tenant_db, require_role
@@ -787,6 +787,19 @@ def _with_review_summaries(query):
     )
 
 
+def _contains_pattern(value: str) -> str:
+    """
+    Escape one user-supplied substring for use inside a LIKE pattern.
+
+    Without this, `%` and `_` typed into the search box would be interpreted as
+    wildcards: a search for "100%" would match everything beginning with "100",
+    and "a_c" would silently match "abc". Backslash is LIKE's default escape
+    character in PostgreSQL, so escaping with it makes every character literal.
+    """
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
 @router.get("/applications", response_model=list[ApplicationResponse])
 def list_applications(
     session: TenantSession,
@@ -795,9 +808,16 @@ def list_applications(
     limit: int = 100,
     status: str = None,
     event_type: str = None,
+    q: Optional[str] = None,
 ) -> list[ApplicationResponse]:
     """
     List all applications in the admin's tenant, with optional filtering.
+
+    `q` is a free-text search over event name, location and description. It is
+    matched in the database rather than in the browser so it covers every row
+    in the tenant, not just the page the client happens to have loaded; ILIKE
+    keeps it case-insensitive, and the LIKE metacharacters in the input are
+    escaped so they match literally.
 
     Each entry carries its per-agency review summaries: agency name, decision
     status, comment and timestamps. RLS plus the explicit tenant predicate keep
@@ -816,6 +836,17 @@ def list_applications(
         query = query.where(Application.status == status)
     if event_type is not None:
         query = query.where(Application.event_type == event_type)
+
+    needle = (q or "").strip()
+    if needle:
+        pattern = _contains_pattern(needle)
+        query = query.where(
+            or_(
+                Application.event_name.ilike(pattern),
+                Application.location.ilike(pattern),
+                Application.description.ilike(pattern),
+            )
+        )
 
     # Order by most recently updated first
     query = query.order_by(Application.updated_at.desc()).offset(offset).limit(limit)

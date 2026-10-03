@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import {
   ArrowRight,
@@ -12,6 +12,7 @@ import Link from "next/link";
 import { useCallback, useMemo, useState } from "react";
 import { useToken } from "@/lib/auth";
 import { listAdminApplications } from "@/lib/endpoints";
+import { useDebouncedValue } from "@/lib/use-debounced";
 import {
   formatDateRange,
   formatRelative,
@@ -64,10 +65,16 @@ import {
 /**
  * The City Admin's application list.
  *
- * Same shape as the organizer's list — filters, search, sort, "load more" — but
+ * Same shape as the organizer's list â€” filters, search, sort, "load more" â€” but
  * it reads the admin-scoped endpoint, so it shows every application in the city
  * rather than one person's, and every row links into the admin's read-only
  * detail view.
+ *
+ * Search is delegated to the API (`q` on the list endpoint) rather than
+ * filtered over the loaded rows here: the database matches across the whole
+ * tenant, so a result is a complete answer instead of a subset of whatever has
+ * been paged in. Sorting remains local because it only ever orders the rows
+ * already on screen.
  *
  * The admin endpoint does not populate per-agency review progress (`reviews`
  * arrives empty), so the progress column only renders a bar when the server
@@ -87,6 +94,9 @@ export function AdminApplicationsList() {
   const [statusParam, setStatusParam] = useQueryParamState("status", ALL);
   const [eventTypeParam, setEventTypeParam] = useQueryParamState("event_type", ALL);
   const [query, setQuery] = useState("");
+  // The input stays unfiltered locally; only a settled value is sent, so one
+  // request per pause in typing rather than one per keystroke.
+  const search = useDebouncedValue(query.trim(), 250);
 
   const [sort, setSort] = useState<{ key: SortKey; direction: "asc" | "desc" }>({
     key: "updated_at",
@@ -106,8 +116,9 @@ export function AdminApplicationsList() {
 
   // Pages accumulate: "load more" appends to what is already on screen instead of
   // replacing it, so the row a user is looking at does not vanish underneath them.
-  // Filters are part of the cache key, so changing one restarts from the first page
-  // rather than appending rows from a different result set.
+  // Filters and the search term are part of the cache key, so changing one
+  // restarts from the first page rather than appending rows from a different
+  // result set.
   const {
     items: applications,
     error,
@@ -121,13 +132,13 @@ export function AdminApplicationsList() {
     useCallback(
       (signal, offset, limit) =>
         listAdminApplications(
-          { status, event_type: eventType, offset, limit },
+          { q: search, status, event_type: eventType, offset, limit },
           { token, signal },
         ),
-      [token, status, eventType],
+      [token, search, status, eventType],
     ),
     PageSize,
-    [token, status, eventType],
+    [token, search, status, eventType],
     (application) => application.id,
   );
 
@@ -139,20 +150,11 @@ export function AdminApplicationsList() {
     setEventTypeParam(next);
   }
 
+  // Sorting only; the search and the filters were already applied by the
+  // server, so what is on screen is the complete result set for this query.
   const visible = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    const filtered =
-      needle === ""
-        ? applications
-        : applications.filter((application) =>
-            [application.event_name, application.location ?? "", application.description ?? ""]
-              .join(" ")
-              .toLowerCase()
-              .includes(needle),
-          );
-
     const direction = sort.direction === "asc" ? 1 : -1;
-    return [...filtered].sort((a, b) => {
+    return [...applications].sort((a, b) => {
       switch (sort.key) {
         case "event_name":
           return a.event_name.localeCompare(b.event_name) * direction;
@@ -168,7 +170,7 @@ export function AdminApplicationsList() {
           );
       }
     });
-  }, [applications, query, sort]);
+  }, [applications, sort]);
 
   const counts = useMemo(
     () => summarizeCounts(applications),
@@ -183,6 +185,11 @@ export function AdminApplicationsList() {
     );
   }
 
+  // Rows belonging to the previous query are dropped the moment the query
+  // changes, so an empty screen plus a request in flight means "loading", not
+  // "nothing matched".
+  const showSkeleton = isLoading && applications.length === 0;
+
   /* --- Render ------------------------------------------------------------- */
 
   if (error) {
@@ -193,18 +200,18 @@ export function AdminApplicationsList() {
     );
   }
 
-  const isFirstLoad = isLoading;
-
   return (
     <Panel bodyClassName="p-0">
-      {/* Filter bar */}
+      {/* Filter bar. Nothing here is disabled while a request is in flight:
+          each change simply supersedes the previous fetch, so the controls
+          stay live and never swallow a keystroke or a click. */}
       <div className="flex flex-wrap items-end gap-3 border-b border-line p-4">
         <div className="min-w-[13rem] flex-1">
           <label
             htmlFor="application-search"
             className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-ink-500"
           >
-            Search loaded applications
+            Search applications
           </label>
           <Input
             id="application-search"
@@ -213,12 +220,11 @@ export function AdminApplicationsList() {
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Name, location or description"
             leading={<Search />}
-            disabled={isFirstLoad}
           />
         </div>
 
         <FilterField label="Status" htmlFor="filter-status" className="w-44">
-          <Select value={statusParam} onValueChange={onStatusChange} disabled={isFirstLoad}>
+          <Select value={statusParam} onValueChange={onStatusChange}>
             <SelectTrigger id="filter-status" aria-label="Filter by status">
               <SelectValue />
             </SelectTrigger>
@@ -234,7 +240,7 @@ export function AdminApplicationsList() {
         </FilterField>
 
         <FilterField label="Event type" htmlFor="filter-event-type" className="w-44">
-          <Select value={eventTypeParam} onValueChange={onEventTypeChange} disabled={isFirstLoad}>
+          <Select value={eventTypeParam} onValueChange={onEventTypeChange}>
             <SelectTrigger id="filter-event-type" aria-label="Filter by event type">
               <SelectValue />
             </SelectTrigger>
@@ -256,14 +262,13 @@ export function AdminApplicationsList() {
         )}
       </div>
 
-      {/* Loaded-count bar. States the number rather than implying it is a total. */}
-      {!isFirstLoad && applications.length > 0 && (
+      {/* Result-count bar. States the number rather than implying it is a total. */}
+      {applications.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line bg-surface-muted px-4 py-2.5">
           <p className="text-[13px] text-ink-500">
-            Showing <span className="tabular font-medium text-ink-800">{visible.length}</span>{" "}
-            of <span className="tabular font-medium text-ink-800">{applications.length}</span>{" "}
-            loaded
-            {mayHaveMore && " · more available"}
+            Showing <span className="tabular font-medium text-ink-800">{applications.length}</span>{" "}
+            {applications.length === 1 ? "application" : "applications"}
+            {mayHaveMore && " Â· more available"}
           </p>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -280,12 +285,12 @@ export function AdminApplicationsList() {
               })}
           </div>
 
-          {isRefreshing && <p className="text-[13px] text-ink-400">Refreshing…</p>}
+          {isRefreshing && <p className="text-[13px] text-ink-400">Refreshingâ€¦</p>}
         </div>
       )}
 
       {/* Body */}
-      {isFirstLoad ? (
+      {showSkeleton ? (
         <SkeletonRows rows={6} columns={5} />
       ) : applications.length === 0 ? (
         hasFilters ? (
@@ -297,8 +302,6 @@ export function AdminApplicationsList() {
             description="Applications appear here as soon as an organizer in your city creates one."
           />
         )
-      ) : visible.length === 0 ? (
-        <NoMatchingFiltersEmptyState onClear={clearFilters} />
       ) : (
         <>
           <ApplicationTable
@@ -393,7 +396,7 @@ function ApplicationTable({
                         {application.event_type}
                         {application.location && (
                           <>
-                            <span aria-hidden>·</span>
+                            <span aria-hidden>Â·</span>
                             <span className="inline-flex min-w-0 items-center gap-1">
                               <MapPin aria-hidden className="size-3 shrink-0" />
                               <span className="truncate">
@@ -464,7 +467,7 @@ function ApplicationTable({
                     </p>
                     <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-ink-500">
                       <span>{application.event_type}</span>
-                      <span aria-hidden>·</span>
+                      <span aria-hidden>Â·</span>
                       <span className="tabular">
                         {formatDateRange(application.start_date, application.end_date)}
                       </span>
@@ -495,7 +498,7 @@ function ApplicationTable({
  * Review progress, when the server sent it.
  *
  * The admin endpoint does not populate `reviews`, so a bare "no agencies"
- * message would be a claim the data cannot support — a submitted application
+ * message would be a claim the data cannot support â€” a submitted application
  * plainly has agencies working on it. Instead: a draft genuinely has none, and
  * anything else says the detail is not available in this view. If the endpoint
  * starts returning review summaries, the bar appears without further changes.

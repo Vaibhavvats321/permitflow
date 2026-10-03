@@ -207,12 +207,17 @@ export function getDashboard({ token, signal }: CallOptions): Promise<DashboardS
  * Served by the admin-scoped endpoints rather than the organizer ones: the
  * response is the same `ApplicationResponse` shape, but tenant-wide and
  * read-only — there is no create, edit or submit path for this role.
+ *
+ * `q` is passed straight through to the API, which searches name, location and
+ * description in the database. The browser never filters the rows itself, so a
+ * match is a match even when the row is still behind "load more".
  */
 export async function listAdminApplications(
   params: ApplicationListParams,
   { token, signal }: CallOptions,
 ): Promise<ApplicationResponse[]> {
   const search = query({
+    q: params.q,
     status: params.status,
     event_type: params.event_type,
     offset: params.offset,
