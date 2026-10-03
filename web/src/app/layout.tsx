@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
+import { SessionProvider } from "@/lib/auth";
+import { ToastProvider } from "@/components/ui/toast";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -8,15 +10,27 @@ const geistSans = Geist({
 });
 
 export const metadata: Metadata = {
-  title: "PermitFlow",
+  title: {
+    default: "PermitFlow",
+    template: "%s — PermitFlow",
+  },
   description:
-    "Multi-tenant event permit applications for cities and reviewing agencies.",
+    "Submit event permit applications once and track every agency decision in a single timeline.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`${geistSans.variable} h-full antialiased`}>
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full">
+        {/*
+          The providers sit at the root rather than inside each route group, so a
+          sign-out triggered from any workspace — including one reached after a
+          hard refresh — reaches the same context that `useSession` reads.
+        */}
+        <SessionProvider>
+          <ToastProvider>{children}</ToastProvider>
+        </SessionProvider>
+      </body>
     </html>
   );
 }

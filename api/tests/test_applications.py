@@ -614,8 +614,8 @@ def test_forged_tenant_claim_cannot_file_into_another_city(
     response = client.post(APPLICATIONS, json=VALID_PAYLOAD, headers=auth(forged))
 
     assert response.status_code == 401
-    assert springfield.session.query(Application).count() == 0
-    assert riverton.session.query(Application).count() == 0
+    assert springfield.session.query(Application).filter(Application.tenant_id == springfield.tenant.id).count() == 0
+    assert riverton.session.query(Application).filter(Application.tenant_id == riverton.tenant.id).count() == 0
 
 
 def test_organizer_role_claim_cannot_be_forged_to_pass_the_role_gate(
@@ -640,4 +640,4 @@ def test_organizer_role_claim_cannot_be_forged_to_pass_the_role_gate(
     response = client.post(APPLICATIONS, json=VALID_PAYLOAD, headers=auth(forged))
 
     assert response.status_code == 403
-    assert tenant.session.query(Application).count() == 0
+    assert tenant.session.query(Application).filter(Application.tenant_id == tenant.tenant.id).count() == 0

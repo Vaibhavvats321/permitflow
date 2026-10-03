@@ -1,18 +1,256 @@
 @import "tailwindcss";
 
-:root {
-  --background: #f8fafc;
-  --foreground: #0f172a;
+/*
+ * PermitFlow design tokens.
+ *
+ * Light theme only, deliberately. The product is an operations tool that people
+ * open in daylight to answer a question — "where is my permit?" — so the surface
+ * is a soft neutral rather than pure white, and the ink is deep navy-slate rather
+ * than black. Pure white surfaces plus black text is the visual signature of a
+ * default dashboard; this is deliberately not that.
+ *
+ * Tailwind v4 reads this block to generate utilities, so `bg-surface`,
+ * `text-ink-500`, `rounded-card` and `shadow-raised` are all real classes.
+ */
+
+@theme {
+  /* --- Type -------------------------------------------------------------- */
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", monospace;
+
+  /*
+   * Ink is one hue at descending opacity. Because every step is the same hue,
+   * hierarchy reads as depth rather than as colour changes, which is what keeps
+   * a dense table calm.
+   */
+  --color-ink-950: #0b1220;
+  --color-ink-900: #131c2e;
+  --color-ink-800: #1f2a3d;
+  --color-ink-700: #33405a;
+  --color-ink-600: #4a5871;
+  --color-ink-500: #64748b;
+  --color-ink-400: #8794a8;
+  --color-ink-300: #b3bdcb;
+  --color-ink-200: #d7dde6;
+  --color-ink-100: #e9edf3;
+  --color-ink-50: #f4f6fa;
+
+  /* --- Surfaces ---------------------------------------------------------- */
+  /* Canvas sits behind everything; cards lift off it. */
+  --color-canvas: #f6f7f9;
+  --color-surface: #ffffff;
+  --color-surface-muted: #fafbfc;
+  --color-surface-sunken: #f2f4f7;
+
+  /* --- Lines ------------------------------------------------------------- */
+  --color-line: #e4e8ee;
+  --color-line-strong: #d3d9e2;
+
+  /* --- Brand ------------------------------------------------------------- */
+  --color-brand-50: #eef1ff;
+  --color-brand-100: #e0e5ff;
+  --color-brand-200: #c6cfff;
+  --color-brand-300: #a3adfd;
+  --color-brand-400: #8184f8;
+  --color-brand-500: #6366f1;
+  --color-brand-600: #4f46e5;
+  --color-brand-700: #4338ca;
+  --color-brand-800: #3730a3;
+  --color-brand-900: #312e81;
+
+  /* --- Semantic ---------------------------------------------------------- *
+   * Restrained on purpose. These appear as small badges and progress marks, so
+   * they carry meaning rather than decoration. Each has a matched -soft and
+   * -ink partner so a badge can be tinted without the text losing contrast.
+   */
+  --color-positive: #059669;
+  --color-positive-soft: #ecfdf5;
+  --color-positive-ink: #065f46;
+
+  --color-attention: #b45309;
+  --color-attention-soft: #fffbeb;
+  --color-attention-ink: #92400e;
+
+  --color-critical: #dc2626;
+  --color-critical-soft: #fef2f2;
+  --color-critical-ink: #991b1b;
+
+  --color-caution: #d97706;
+  --color-caution-soft: #fff7ed;
+  --color-caution-ink: #9a3412;
+
+  --color-info: #2563eb;
+  --color-info-soft: #eff6ff;
+  --color-info-ink: #1d4ed8;
+
+  --color-neutral-soft: #f1f3f7;
+  --color-neutral-ink: #475569;
+
+  /* --- Radius ------------------------------------------------------------ *
+   * One medium radius family. Cards and controls share it so the interface
+   * reads as one material instead of a collection of parts.
+   */
+  --radius-control: 0.5rem;
+  --radius-card: 0.625rem;
+  --radius-panel: 0.75rem;
+
+  /* --- Elevation --------------------------------------------------------- *
+   * Three steps, each doing a distinct job. `raised` is a resting card, `floating`
+   * is a menu or dialog, `overlay` is a modal scrim's companion.
+   */
+  --shadow-raised: 0 1px 2px 0 rgb(11 18 32 / 0.04),
+    0 1px 3px 0 rgb(11 18 32 / 0.06);
+  --shadow-floating: 0 4px 12px -2px rgb(11 18 32 / 0.08),
+    0 12px 28px -8px rgb(11 18 32 / 0.12);
+  --shadow-overlay: 0 24px 56px -12px rgb(11 18 32 / 0.22);
+
+  /* --- Motion ------------------------------------------------------------ */
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
+/* -------------------------------------------------------------------------- */
+
+* {
+  border-color: var(--color-line);
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  overflow-x: hidden;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  background-color: var(--color-canvas);
+  color: var(--color-ink-900);
+  font-family: var(--font-sans);
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+}
+
+/*
+ * Numeric columns line up when the digits are tabular. Used on attendance
+ * figures, counts and timestamps.
+ */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * One focus treatment everywhere. Visible for keyboard users, invisible for
+ * pointer users, never removed — an enterprise tool without a visible focus
+ * ring is unusable without a mouse.
+ */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-brand-500);
+  outline-offset: 2px;
+  border-radius: var(--radius-control);
+}
+
+/* Radix animates the parts it owns; these are the shared timings. */
+@keyframes pf-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes pf-overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes pf-content-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -46%) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+@keyframes pf-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes pf-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pf-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.animate-overlay-in {
+  animation: pf-overlay-in 140ms var(--ease-out-soft);
+}
+
+.animate-content-in {
+  animation: pf-content-in 160ms var(--ease-out-soft);
+}
+
+.animate-pop-in {
+  animation: pf-pop-in 120ms var(--ease-out-soft);
+  transform-origin: var(--radix-popper-transform-origin, center);
+}
+
+.animate-slide-up {
+  animation: pf-slide-up 200ms var(--ease-out-soft);
+}
+
+/* Skeletons shimmer rather than pulse; pulsing reads as "broken". */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background-color: var(--color-ink-100);
+}
+
+.skeleton::after {
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background-image: linear-gradient(
+    90deg,
+    transparent,
+    rgb(255 255 255 / 0.65),
+    transparent
+  );
+  animation: pf-shimmer 1.6s infinite;
+  content: "";
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
