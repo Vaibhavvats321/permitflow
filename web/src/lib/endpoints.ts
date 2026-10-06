@@ -79,12 +79,16 @@ export const auth = {
  *
  * Returns a bare array: the endpoint has no total count, so the caller learns
  * "there may be more" from the array being exactly `limit` long.
+ *
+ * `q` is passed straight through and matched by the server across every
+ * application the caller owns — not just the rows paged into the browser.
  */
 export async function listApplications(
   params: ApplicationListParams,
   { token, signal }: CallOptions,
 ): Promise<ApplicationResponse[]> {
   const search = query({
+    q: params.q,
     status: params.status,
     event_type: params.event_type,
     offset: params.offset,

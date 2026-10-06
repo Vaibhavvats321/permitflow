@@ -354,6 +354,128 @@ def test_list_limit_is_capped(client: TestClient, tenant) -> None:
     assert response.status_code == 422
 
 
+def _search(client: TestClient, token: str, **params) -> list[dict]:
+    """GET the caller's application list with query parameters attached."""
+    response = client.get(APPLICATIONS, params=params, headers=auth(token))
+    assert response.status_code == 200
+    return response.json()
+
+
+def test_list_search_matches_name_location_and_description(
+    client: TestClient, tenant
+) -> None:
+    """`q` matches event name, location and description, case-insensitively."""
+    token = tenant.token_for(tenant.organizer)
+    create(
+        client,
+        token,
+        event_name="Harbor Music Festival",
+        location="Harbor Pavilion",
+        description="Waterfront stage programme",
+    )
+    create(
+        client,
+        token,
+        event_name="Winter Market",
+        location="Union Square",
+        description="Craft stalls and food trucks",
+    )
+
+    assert [a["event_name"] for a in _search(client, token, q="harbor music")] == [
+        "Harbor Music Festival"
+    ]
+    assert [a["event_name"] for a in _search(client, token, q="HARBOR")] == [
+        "Harbor Music Festival"
+    ]
+    assert [a["event_name"] for a in _search(client, token, q="union square")] == [
+        "Winter Market"
+    ]
+    assert [a["event_name"] for a in _search(client, token, q="waterfront")] == [
+        "Harbor Music Festival"
+    ]
+
+
+def test_list_search_with_no_match_returns_empty(client: TestClient, tenant) -> None:
+    token = tenant.token_for(tenant.organizer)
+    create(client, token, event_name="Summer Fair")
+
+    assert _search(client, token, q="no-such-event") == []
+
+
+def test_list_search_with_blank_query_returns_everything(
+    client: TestClient, tenant
+) -> None:
+    token = tenant.token_for(tenant.organizer)
+    create(client, token, event_name="First Event")
+    create(client, token, event_name="Second Event")
+
+    assert len(_search(client, token)) == 2
+    assert len(_search(client, token, q="")) == 2
+    assert len(_search(client, token, q="   ")) == 2
+
+
+def test_list_search_is_scoped_to_the_caller(client: TestClient, tenant) -> None:
+    """Search never widens the submitter predicate: another organizer's rows
+    in the same tenant stay invisible even when the names match."""
+    token = tenant.token_for(tenant.organizer)
+    other_token = tenant.token_for(tenant.add_organizer("search"))
+
+    own_id = create(client, token, event_name="Shared Carnival Name").json()["id"]
+    other_id = create(client, other_token, event_name="Shared Carnival Name").json()["id"]
+
+    assert [a["id"] for a in _search(client, token, q="carnival")] == [own_id]
+    assert [a["id"] for a in _search(client, other_token, q="carnival")] == [other_id]
+
+
+def test_list_search_combines_with_filters_and_pagination(
+    client: TestClient, tenant
+) -> None:
+    """`q` narrows the same query as the filters and applies to every page."""
+    token = tenant.token_for(tenant.organizer)
+    create(client, token, event_name="Autumn Jazz Night", event_type=EventType.CONCERT.value)
+    create(
+        client,
+        token,
+        event_name="Autumn Fair Parade",
+        event_type=EventType.STREET_FAIR.value,
+    )
+    for index in range(3):
+        create(client, token, event_name=f"Autumn Gathering {index}")
+
+    everything = _search(client, token, q="autumn")
+    assert len(everything) == 5
+    assert all("autumn" in a["event_name"].lower() for a in everything)
+
+    by_type = _search(client, token, q="autumn", event_type=EventType.CONCERT.value)
+    assert [a["event_name"] for a in by_type] == ["Autumn Jazz Night"]
+
+    # The search term must carry into later pages, not just the first slice.
+    page = _search(client, token, q="autumn", limit=2, offset=2)
+    assert page == everything[2:4]
+
+    # Clearing the term restores the full, unfiltered set.
+    assert len(_search(client, token)) == 5
+
+
+def test_list_search_treats_like_metacharacters_literally(
+    client: TestClient, tenant
+) -> None:
+    """`%` and `_` typed by a user are data, not wildcards."""
+    token = tenant.token_for(tenant.organizer)
+    create(client, token, event_name="Century 100% Fun Run")
+    create(client, token, event_name="abc night market")
+
+    # An unescaped `%` would match both events.
+    assert [a["event_name"] for a in _search(client, token, q="%")] == [
+        "Century 100% Fun Run"
+    ]
+    assert [a["event_name"] for a in _search(client, token, q="100%")] == [
+        "Century 100% Fun Run"
+    ]
+    # An unescaped `_` would make "a_c" match "abc".
+    assert _search(client, token, q="a_c") == []
+
+
 def test_organizers_in_the_same_tenant_cannot_see_each_other(client: TestClient, db, make_tenant) -> None:
     """
     RLS is tenant-scoped, so this check belongs to the application.

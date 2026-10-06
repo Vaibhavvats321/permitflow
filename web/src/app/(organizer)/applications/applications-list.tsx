@@ -12,6 +12,7 @@ import Link from "next/link";
 import { useCallback, useMemo, useState } from "react";
 import { useToken } from "@/lib/auth";
 import { listApplications } from "@/lib/endpoints";
+import { useDebouncedValue } from "@/lib/use-debounced";
 import {
   formatDateRange,
   formatRelative,
@@ -64,14 +65,16 @@ import {
 /**
  * The organizer's application list.
  *
- * Three filter controls and a client-side text search, then sorting. Pagination
+ * Three filter controls, a server-side text search, then sorting. Pagination
  * is "load more" because the endpoint returns a bare array with no total — the
  * UI cannot state "page 2 of 7" without inventing that number, so it accumulates
  * and says how many rows are currently loaded.
  *
- * The search box filters the loaded set only, and says so in its hint. It is
- * honest about being a convenience over what is on screen rather than pretending
- * to be a server-side index.
+ * Search and the filters are applied by the API (`q`, `status`, `event_type`
+ * on the list endpoint) rather than over the loaded rows here: the database
+ * matches across every application the caller owns, so a result is the whole
+ * answer instead of a subset of whatever has been paged in. Sorting stays
+ * local because it only orders the rows already on screen.
  */
 
 const ALL = "__all__";
@@ -86,6 +89,9 @@ export function ApplicationsList() {
   const [statusParam, setStatusParam] = useQueryParamState("status", ALL);
   const [eventTypeParam, setEventTypeParam] = useQueryParamState("event_type", ALL);
   const [query, setQuery] = useState("");
+  // The input stays unfiltered locally; only a settled value is sent, so one
+  // request per pause in typing rather than one per keystroke.
+  const search = useDebouncedValue(query.trim(), 250);
 
   const [sort, setSort] = useState<{ key: SortKey; direction: "asc" | "desc" }>({
     key: "updated_at",
@@ -105,8 +111,9 @@ export function ApplicationsList() {
 
   // Pages accumulate: "load more" appends to what is already on screen instead of
   // replacing it, so the row a user is looking at does not vanish underneath them.
-  // Filters are part of the cache key, so changing one restarts from the first page
-  // rather than appending rows from a different result set.
+  // Filters and the search term are part of the cache key, so changing one
+  // restarts from the first page rather than appending rows from a different
+  // result set.
   const {
     items: applications,
     error,
@@ -119,11 +126,14 @@ export function ApplicationsList() {
   } = usePaginatedApi<ApplicationResponse>(
     useCallback(
       (signal, offset, limit) =>
-        listApplications({ status, event_type: eventType, offset, limit }, { token, signal }),
-      [token, status, eventType],
+        listApplications(
+          { q: search, status, event_type: eventType, offset, limit },
+          { token, signal },
+        ),
+      [token, search, status, eventType],
     ),
     PageSize,
-    [token, status, eventType],
+    [token, search, status, eventType],
     (application) => application.id,
   );
 
@@ -135,20 +145,11 @@ export function ApplicationsList() {
     setEventTypeParam(next);
   }
 
+  // Sorting only; the search and the filters were already applied by the
+  // server, so what is on screen is the complete result set for this query.
   const visible = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    const filtered =
-      needle === ""
-        ? applications
-        : applications.filter((application) =>
-            [application.event_name, application.location ?? "", application.description ?? ""]
-              .join(" ")
-              .toLowerCase()
-              .includes(needle),
-          );
-
     const direction = sort.direction === "asc" ? 1 : -1;
-    return [...filtered].sort((a, b) => {
+    return [...applications].sort((a, b) => {
       switch (sort.key) {
         case "event_name":
           return a.event_name.localeCompare(b.event_name) * direction;
@@ -164,7 +165,7 @@ export function ApplicationsList() {
           );
       }
     });
-  }, [applications, query, sort]);
+  }, [applications, sort]);
 
   const counts = useMemo(
     () => summarizeCounts(applications),
@@ -179,6 +180,11 @@ export function ApplicationsList() {
     );
   }
 
+  // Rows belonging to the previous query are dropped the moment the query
+  // changes, so an empty screen plus a request in flight means "loading", not
+  // "nothing matched".
+  const showSkeleton = isLoading && applications.length === 0;
+
   /* --- Render ------------------------------------------------------------- */
 
   if (error) {
@@ -189,18 +195,18 @@ export function ApplicationsList() {
     );
   }
 
-  const isFirstLoad = isLoading;
-
   return (
     <Panel bodyClassName="p-0">
-      {/* Filter bar */}
+      {/* Filter bar. Nothing here is disabled while a request is in flight:
+          each change simply supersedes the previous fetch, so the controls
+          stay live and never swallow a keystroke or a click. */}
       <div className="flex flex-wrap items-end gap-3 border-b border-line p-4">
         <div className="min-w-[13rem] flex-1">
           <label
             htmlFor="application-search"
             className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-ink-500"
           >
-            Search loaded applications
+            Search applications
           </label>
           <Input
             id="application-search"
@@ -209,12 +215,11 @@ export function ApplicationsList() {
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Name, location or description"
             leading={<Search />}
-            disabled={isFirstLoad}
           />
         </div>
 
         <FilterField label="Status" htmlFor="filter-status" className="w-44">
-          <Select value={statusParam} onValueChange={onStatusChange} disabled={isFirstLoad}>
+          <Select value={statusParam} onValueChange={onStatusChange}>
             <SelectTrigger id="filter-status" aria-label="Filter by status">
               <SelectValue />
             </SelectTrigger>
@@ -230,7 +235,7 @@ export function ApplicationsList() {
         </FilterField>
 
         <FilterField label="Event type" htmlFor="filter-event-type" className="w-44">
-          <Select value={eventTypeParam} onValueChange={onEventTypeChange} disabled={isFirstLoad}>
+          <Select value={eventTypeParam} onValueChange={onEventTypeChange}>
             <SelectTrigger id="filter-event-type" aria-label="Filter by event type">
               <SelectValue />
             </SelectTrigger>
@@ -252,13 +257,12 @@ export function ApplicationsList() {
         )}
       </div>
 
-      {/* Loaded-count bar. States the number rather than implying it is a total. */}
-      {!isFirstLoad && applications.length > 0 && (
+      {/* Result-count bar. States the number rather than implying it is a total. */}
+      {applications.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line bg-surface-muted px-4 py-2.5">
           <p className="text-[13px] text-ink-500">
-            Showing <span className="tabular font-medium text-ink-800">{visible.length}</span>{" "}
-            of <span className="tabular font-medium text-ink-800">{applications.length}</span>{" "}
-            loaded
+            Showing <span className="tabular font-medium text-ink-800">{applications.length}</span>{" "}
+            {applications.length === 1 ? "application" : "applications"}
             {mayHaveMore && " · more available"}
           </p>
 
@@ -281,7 +285,7 @@ export function ApplicationsList() {
       )}
 
       {/* Body */}
-      {isFirstLoad ? (
+      {showSkeleton ? (
         <SkeletonRows rows={6} columns={5} />
       ) : applications.length === 0 ? (
         hasFilters ? (
@@ -298,8 +302,6 @@ export function ApplicationsList() {
             }
           />
         )
-      ) : visible.length === 0 ? (
-        <NoMatchingFiltersEmptyState onClear={clearFilters} />
       ) : (
         <>
           <ApplicationTable

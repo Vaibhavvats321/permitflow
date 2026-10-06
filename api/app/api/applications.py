@@ -33,9 +33,12 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
+# Shared with the admin list so every search box escapes and matches the same
+# way. admin.py does not import this module, so the import is not circular.
+from app.api.admin import _contains_pattern
 from app.core.lifecycle import (
     InvalidStatusTransition,
     assert_application_editable,
@@ -237,6 +240,10 @@ def list_applications(
         EventType | None,
         Query(alias="event_type", description="Filter by event type."),
     ] = None,
+    q: Annotated[
+        str | None,
+        Query(description="Free-text search over name, location and description."),
+    ] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=_MAX_PAGE_SIZE)] = 50,
 ) -> list[ApplicationResponse]:
@@ -246,6 +253,11 @@ def list_applications(
     RLS restricts the result to the caller's tenant; `submitter_id` restricts it
     to the caller. Neither is redundant: a city may have several organizers, and
     one must not see another's drafts.
+
+    `q` is matched in the database rather than in the browser, so it covers
+    every application the caller owns instead of only the rows paged on screen.
+    It sits under both predicates above: the search can never widen the result
+    past the caller's own rows.
     """
     query = select(Application).where(Application.submitter_id == current_user.id)
 
@@ -253,6 +265,17 @@ def list_applications(
         query = query.where(Application.status == status_filter)
     if event_type_filter is not None:
         query = query.where(Application.event_type == event_type_filter)
+
+    needle = (q or "").strip()
+    if needle:
+        pattern = _contains_pattern(needle)
+        query = query.where(
+            or_(
+                Application.event_name.ilike(pattern),
+                Application.location.ilike(pattern),
+                Application.description.ilike(pattern),
+            )
+        )
 
     # created_at is not unique, so id breaks ties to keep paging deterministic.
     # Eager-load review tasks for the tracking view. Without this each returned
