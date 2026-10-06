@@ -157,7 +157,8 @@ export function ReviewTaskDetail() {
 
   const own = reviewStatus(data.review_status);
   const overall = applicationStatus(data.application.status);
-  const isActionable = data.review_status === "Pending";
+  const isRejectedOverall = data.application.status === "Rejected";
+  const isActionable = data.review_status === "Pending" && !isRejectedOverall;
   const hasComment = Boolean(data.comment?.trim());
   const isLargeEvent = (data.application.expected_attendance ?? 0) > LARGE_EVENT_THRESHOLD;
   const currentStatus = data.application.status;
@@ -286,17 +287,23 @@ export function ReviewTaskDetail() {
                 <div className="min-w-0">
                   <p className="text-[13px] font-semibold text-ink-900">
                     {data.review_status === "Pending"
-                      ? "Still awaiting your decision"
+                      ? isRejectedOverall
+                        ? "No decision is needed from your agency"
+                        : "Still awaiting your decision"
                       : `You recorded "${own.label}" ${formatRelative(data.updated_at)}`}
                   </p>
                   <p className="mt-1 text-[13px] leading-relaxed text-ink-600">
                     {data.review_status === "Pending"
-                      ? "This task is still open for your agency."
-                      : "A reviewer may record a new decision, which replaces the previous one and is added to the history."}
+                      ? isRejectedOverall
+                        ? "Another agency already rejected this application, so the outcome is final. You can read the details and history below, but no review actions are available."
+                        : "This task is still open for your agency."
+                      : isRejectedOverall
+                        ? "Another agency rejected this application, so the outcome is final and no further decisions can be recorded."
+                        : "A reviewer may record a new decision, which replaces the previous one and is added to the history."}
                   </p>
                 </div>
               </div>
-              {data.review_status !== "Pending" && (
+              {data.review_status !== "Pending" && !isRejectedOverall && (
                 <Button
                   variant="default"
                   size="sm"
@@ -423,14 +430,13 @@ export function ReviewTaskDetail() {
                     {overall.description}
                   </p>
 
-                  {data.application.status === "Rejected" &&
-                    data.review_status !== "Rejected" && (
+                  {isRejectedOverall && data.review_status !== "Rejected" && (
                       <div className="mt-4 flex items-start gap-2.5 rounded-control border border-critical/20 bg-critical-soft px-3 py-2.5">
                         <AlertTriangle aria-hidden className="mt-0.5 size-3.5 shrink-0 text-critical" />
                         <p className="text-[13px] leading-relaxed text-critical-ink">
-                          Another agency has rejected this application, so your
-                          decision will not change its outcome. You can still record
-                          one for the record.
+                          Another agency has rejected this application, so the
+                          outcome is final. This page is read-only — no further
+                          review decisions can be recorded.
                         </p>
                       </div>
                     )}
