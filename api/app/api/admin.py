@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, UTC
-from typing import Annotated, List, Optional
+from typing import Annotated, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select, text
@@ -351,18 +351,46 @@ def list_users(
         Optional[UserRole],
         Query(alias="role", description="Filter by role."),
     ] = None,
+    q: Annotated[
+        Optional[str],
+        Query(description="Free-text search over email."),
+    ] = None,
+    sort: Annotated[
+        Literal["email", "created_at"],
+        Query(description="Column to order by."),
+    ] = "created_at",
+    order: Annotated[
+        Literal["asc", "desc"],
+        Query(description="Sort direction."),
+    ] = "desc",
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
 ) -> List[UserResponse]:
     """
-    List all users in the admin's tenant, with optional role filter.
+    List the users in the admin's tenant, newest first, with optional
+    role filter, search and sort.
+
+    `q` is matched against email in the database rather than in the browser so
+    it covers every user in the tenant, not just the page the client has
+    loaded; ILIKE keeps it case-insensitive and the LIKE metacharacters are
+    escaped so they match literally. `sort`/`order` order in the database too:
+    the client pages with offset/limit, which is only coherent when every page
+    comes from one stable order. `User.id` is the tie-break because seeded
+    users share a `created_at`, and an arbitrary tie order would make pages
+    overlap or skip rows.
     """
     query = select(User).where(User.tenant_id == current_user.tenant_id)
 
     if role_filter is not None:
         query = query.where(User.role == role_filter)
 
-    query = query.order_by(User.created_at.desc()).offset(offset).limit(limit)
+    needle = (q or "").strip()
+    if needle:
+        query = query.where(User.email.ilike(_contains_pattern(needle)))
+
+    sort_column = {"email": User.email, "created_at": User.created_at}[sort]
+    primary = sort_column.desc() if order == "desc" else sort_column.asc()
+    query = query.order_by(primary, User.id.asc()).offset(offset).limit(limit)
 
     users = session.execute(query).scalars().all()
 

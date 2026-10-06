@@ -738,6 +738,233 @@ def test_list_users_with_role_filter(client: TestClient, make_tenant) -> None:
         assert rev_users[0]["role"] == "Agency Reviewer"
 
 
+def _create_user(
+    client: TestClient,
+    token: str,
+    email: str,
+    role: str = "Organizer",
+    agency_id: str | None = None,
+) -> dict:
+    payload: dict = {"email": email, "password": "password123", "role": role}
+    if agency_id is not None:
+        payload["agency_id"] = agency_id
+    resp = client.post(f"{ADMIN_PREFIX}/users", json=payload, headers=auth(token))
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
+def test_search_users_by_email(client: TestClient, make_tenant) -> None:
+    """`q` matches email case-insensitively, partially, or not at all."""
+    tenant = make_tenant("UserSearchTenant")
+    token = tenant.token_for(tenant.admin)
+    zoe = _create_user(client, token, "zoe.find@example.com")
+    _create_user(client, token, "mike.find@example.com")
+
+    with TestClient(app) as client:
+        # Case-insensitive partial match over every field the search covers.
+        resp = client.get(f"{ADMIN_PREFIX}/users?q=FIND", headers=auth(token))
+        assert resp.status_code == 200
+        assert {u["email"] for u in resp.json()} == {
+            "zoe.find@example.com",
+            "mike.find@example.com",
+        }
+
+        # Narrower needle narrows the result to one row.
+        resp = client.get(f"{ADMIN_PREFIX}/users?q=zoe", headers=auth(token))
+        assert [u["email"] for u in resp.json()] == ["zoe.find@example.com"]
+        assert resp.json()[0]["id"] == str(zoe["id"])
+
+        # A needle that matches nothing is an empty list, not an error.
+        resp = client.get(f"{ADMIN_PREFIX}/users?q=no-such-user", headers=auth(token))
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+        # A blank query is not a filter: everyone comes back.
+        resp = client.get(f"{ADMIN_PREFIX}/users?q=%20%20", headers=auth(token))
+        assert resp.status_code == 200
+        assert len(resp.json()) == 4  # 2 fixture users + the 2 created here
+
+
+def test_search_users_is_tenant_scoped(client: TestClient, make_tenant) -> None:
+    """A search never surfaces another city's users."""
+    tenant_a = make_tenant("UserSearchScopeA")
+    tenant_b = make_tenant("UserSearchScopeB")
+    token_a = tenant_a.token_for(tenant_a.admin)
+    _create_user(client, token_a, "findme.inside@example.com")
+    _create_user(
+        client, tenant_b.token_for(tenant_b.admin), "findme.outside@example.com"
+    )
+
+    with TestClient(app) as client:
+        resp = client.get(f"{ADMIN_PREFIX}/users?q=findme", headers=auth(token_a))
+        assert resp.status_code == 200
+        assert [u["email"] for u in resp.json()] == ["findme.inside@example.com"]
+
+
+def test_sort_users_by_email(client: TestClient, make_tenant) -> None:
+    """sort=email orders alphabetically, in either direction."""
+    tenant = make_tenant("UserSortEmailTenant")
+    token = tenant.token_for(tenant.admin)
+    _create_user(client, token, "zoe.sort@example.com")
+    _create_user(client, token, "alice.sort@example.com")
+    _create_user(client, token, "mike.sort@example.com")
+
+    created = {
+        "zoe.sort@example.com",
+        "alice.sort@example.com",
+        "mike.sort@example.com",
+    }
+
+    with TestClient(app) as client:
+        resp = client.get(
+            f"{ADMIN_PREFIX}/users?sort=email&order=asc", headers=auth(token)
+        )
+        assert resp.status_code == 200
+        emails = [u["email"] for u in resp.json()]
+        assert emails == sorted(emails)
+        assert [e for e in emails if e in created] == [
+            "alice.sort@example.com",
+            "mike.sort@example.com",
+            "zoe.sort@example.com",
+        ]
+
+        resp = client.get(
+            f"{ADMIN_PREFIX}/users?sort=email&order=desc", headers=auth(token)
+        )
+        emails = [u["email"] for u in resp.json()]
+        assert emails == sorted(emails, reverse=True)
+        assert [e for e in emails if e in created] == [
+            "zoe.sort@example.com",
+            "mike.sort@example.com",
+            "alice.sort@example.com",
+        ]
+
+
+def test_sort_users_by_created_date(client: TestClient, make_tenant) -> None:
+    """sort=created_at orders chronologically; the default stays newest first."""
+    tenant = make_tenant("UserSortCreatedTenant")
+    token = tenant.token_for(tenant.admin)
+    first = _create_user(client, token, "first.when@example.com")
+    second = _create_user(client, token, "second.when@example.com")
+    third = _create_user(client, token, "third.when@example.com")
+
+    with TestClient(app) as client:
+        # Ascending: oldest first, creation order preserved.
+        resp = client.get(
+            f"{ADMIN_PREFIX}/users?sort=created_at&order=asc", headers=auth(token)
+        )
+        assert resp.status_code == 200
+        rows = resp.json()
+        stamps = [datetime.fromisoformat(u["created_at"]) for u in rows]
+        assert stamps == sorted(stamps)
+        when_rows = [u for u in rows if u["email"].endswith(".when@example.com")]
+        assert [u["email"] for u in when_rows] == [
+            "first.when@example.com",
+            "second.when@example.com",
+            "third.when@example.com",
+        ]
+
+        # Descending: newest first.
+        resp = client.get(
+            f"{ADMIN_PREFIX}/users?sort=created_at&order=desc", headers=auth(token)
+        )
+        stamps = [datetime.fromisoformat(u["created_at"]) for u in resp.json()]
+        assert stamps == sorted(stamps, reverse=True)
+
+        # No parameters at all must still mean "newest first" — the documented
+        # default the UI and every existing caller were built around.
+        resp_default = client.get(f"{ADMIN_PREFIX}/users", headers=auth(token))
+        resp_desc = client.get(
+            f"{ADMIN_PREFIX}/users?sort=created_at&order=desc", headers=auth(token)
+        )
+        assert [u["id"] for u in resp_default.json()] == [
+            u["id"] for u in resp_desc.json()
+        ]
+        # The first-created user sits behind its younger tenant-mates.
+        default_ids = [u["id"] for u in resp_default.json()]
+        assert default_ids.index(third["id"]) < default_ids.index(second["id"])
+        assert default_ids.index(second["id"]) < default_ids.index(first["id"])
+
+
+def test_list_users_search_sort_pagination(client: TestClient, make_tenant) -> None:
+    """q + sort + offset/limit pages a stable order without overlap or gaps."""
+    tenant = make_tenant("UserPagingTenant")
+    token = tenant.token_for(tenant.admin)
+    _create_user(client, token, "zneedle.one@example.com")
+    _create_user(client, token, "zneedle.two@example.com")
+    _create_user(client, token, "zneedle.three@example.com")
+
+    with TestClient(app) as client:
+        resp = client.get(
+            f"{ADMIN_PREFIX}/users?q=zneedle&sort=email&order=asc&limit=2",
+            headers=auth(token),
+        )
+        assert resp.status_code == 200
+        page1 = resp.json()
+        assert len(page1) == 2
+
+        resp = client.get(
+            f"{ADMIN_PREFIX}/users?q=zneedle&sort=email&order=asc&limit=2&offset=2",
+            headers=auth(token),
+        )
+        page2 = resp.json()
+        assert len(page2) == 1
+
+        ids = [u["id"] for u in page1 + page2]
+        assert len(ids) == len(set(ids)) == 3
+        emails = [u["email"] for u in page1 + page2]
+        assert emails == sorted(emails)
+        assert all("zneedle" in e for e in emails)
+
+
+def test_list_users_search_combines_with_role(
+    client: TestClient, make_tenant
+) -> None:
+    """Search and the role filter are ANDed, not ORed."""
+    # The tenant name must not contain the needle: fixture emails are derived
+    # from it, and "usercombotenant-organizer@…" would match a naive "combo".
+    tenant = make_tenant("UserAndRoleTenant")
+    token = tenant.token_for(tenant.admin)
+    _create_user(client, token, "combo.alice@example.com")
+    _create_user(client, token, "combo.bob@example.com")
+    _create_user(
+        client,
+        token,
+        "combo.vera@example.com",
+        role="Agency Reviewer",
+        agency_id=str(tenant.agencies["Police"].id),
+    )
+
+    with TestClient(app) as client:
+        resp = client.get(f"{ADMIN_PREFIX}/users?q=combo", headers=auth(token))
+        assert len(resp.json()) == 3
+
+        resp = client.get(
+            f"{ADMIN_PREFIX}/users?q=combo&role=Organizer", headers=auth(token)
+        )
+        rows = resp.json()
+        assert {u["email"] for u in rows} == {
+            "combo.alice@example.com",
+            "combo.bob@example.com",
+        }
+        assert all(u["role"] == "Organizer" for u in rows)
+
+
+def test_list_users_rejects_bad_sort_values(client: TestClient, make_tenant) -> None:
+    """Unknown sort/order values are a 422, never a silently ignored parameter."""
+    tenant = make_tenant("UserSortBadTenant")
+    token = tenant.token_for(tenant.admin)
+
+    with TestClient(app) as client:
+        resp = client.get(
+            f"{ADMIN_PREFIX}/users?sort=password_hash", headers=auth(token)
+        )
+        assert resp.status_code == 422
+
+        resp = client.get(f"{ADMIN_PREFIX}/users?order=sideways", headers=auth(token))
+        assert resp.status_code == 422
+
+
 def test_fetch_own_tenant_user(client: TestClient, make_tenant) -> None:
     """Admin can fetch a user from their own tenant."""
     tenant = make_tenant("UserFetchTenant")

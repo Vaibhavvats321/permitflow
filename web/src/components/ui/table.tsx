@@ -78,10 +78,11 @@ export function TableCell({
 /**
  * A sortable column header.
  *
- * Sorting happens client-side over the loaded page, and the control says so in
- * its accessible label. Presenting it as server-side sorting would be a lie about
- * where the order came from, and the "Load more" pattern means there is only ever
- * one page of data in memory anyway.
+ * The control is presentational: it reports the current sort, the direction the
+ * next click applies, and hands the key back through `onSort`. Whether the page
+ * then sorts the loaded rows in the browser or sends the sort to the server
+ * (and resets its cache) is the page's decision — this header just says what is
+ * being asked of it.
  */
 export function SortableHeadCell({
   label,

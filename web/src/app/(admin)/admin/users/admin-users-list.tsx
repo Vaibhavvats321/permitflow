@@ -1,6 +1,6 @@
 "use client";
 
-import { Pencil, Plus, Trash2, Users } from "lucide-react";
+import { Pencil, Plus, Search, SearchX, Trash2, Users } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useState } from "react";
 import { useSession, useToken } from "@/lib/auth";
@@ -9,13 +9,16 @@ import { listAdminUsers } from "@/lib/endpoints";
 import { formatDate, shortId } from "@/lib/format";
 import { rolePresentation } from "@/lib/status";
 import type { AdminUserResponse } from "@/lib/types";
+import { useDebouncedValue } from "@/lib/use-debounced";
 import { usePaginatedApi } from "@/lib/use-api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Panel } from "@/components/ui/card";
 import { EmptyState, ErrorState } from "@/components/ui/empty-state";
+import { Input } from "@/components/ui/input";
 import { SkeletonRows } from "@/components/ui/skeleton";
 import {
+  SortableHeadCell,
   Table,
   TableBody,
   TableCell,
@@ -25,8 +28,15 @@ import {
 } from "@/components/ui/table";
 import { CreateUserDialog, DeleteUserDialog, EditUserDialog } from "./user-dialogs";
 
+type SortKey = "email" | "created_at";
+
 /**
  * The City Admin's user list.
+ *
+ * Search and sorting are done by the server, like the admin applications list:
+ * `q` matches every user in the city, not just the rows already loaded, and the
+ * sort travels with each page request so "load more" appends rows from one
+ * stable order instead of mixing two orderings.
  *
  * Rows link to the user's detail view; edit and delete open dialogs that talk
  * to the admin user endpoints directly. The list only refreshes after a
@@ -43,6 +53,21 @@ export function AdminUsersList() {
   const { user: sessionUser } = useSession();
   const selfId = sessionUser?.id;
 
+  const [query, setQuery] = useState("");
+  // The input stays unfiltered locally; only a settled value is sent, so one
+  // request per pause in typing rather than one per keystroke.
+  const search = useDebouncedValue(query.trim(), 250);
+
+  const [sort, setSort] = useState<{ key: SortKey; direction: "asc" | "desc" }>({
+    key: "created_at",
+    direction: "desc",
+  });
+
+  // Pages accumulate: "load more" appends to what is already on screen instead
+  // of replacing it, so the row a user is looking at does not vanish underneath
+  // them. The search term and the sort are part of the cache key, so changing
+  // either restarts from the first page rather than appending rows from a
+  // differently-filtered result set.
   const {
     items: users,
     error,
@@ -55,13 +80,29 @@ export function AdminUsersList() {
   } = usePaginatedApi<AdminUserResponse>(
     useCallback(
       (signal, offset, limit) =>
-        listAdminUsers({ offset, limit }, { token, signal }),
-      [token],
+        listAdminUsers(
+          { q: search, sort: sort.key, order: sort.direction, offset, limit },
+          { token, signal },
+        ),
+      [token, search, sort.key, sort.direction],
     ),
     PageSize,
-    [token],
+    [token, search, sort.key, sort.direction],
     (user) => user.id,
   );
+
+  function onSort(key: string) {
+    setSort((current) =>
+      current.key === key
+        ? {
+            key: key as SortKey,
+            direction: current.direction === "asc" ? "desc" : "asc",
+          }
+        : // First click on a new column: alphabetical for email, newest first
+          // for dates — the conventional starting point for each.
+          { key: key as SortKey, direction: key === "email" ? "asc" : "desc" },
+    );
+  }
 
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<AdminUserResponse | null>(null);
@@ -75,55 +116,88 @@ export function AdminUsersList() {
     );
   }
 
-  const isFirstLoad = isLoading;
+  // Rows belonging to the previous query stay on screen until the new ones
+  // arrive, so an empty list plus a request in flight means "loading", not
+  // "nothing matched".
+  const showSkeleton = isLoading && users.length === 0;
+  const hasSearch = search !== "";
 
   return (
     <>
       <Panel bodyClassName="p-0">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line p-4">
-          <p className="text-[13px] text-ink-500">
-            {isFirstLoad ? (
-              "Loading users…"
-            ) : (
-              <>
-                Showing{" "}
-                <span className="tabular font-medium text-ink-800">
-                  {users.length}
-                </span>{" "}
-                {users.length === 1 ? "user" : "users"}
-                {mayHaveMore && " · more available"}
-                {isRefreshing && " · refreshing…"}
-              </>
-            )}
-          </p>
+        {/* Search + actions. Nothing here is disabled while a request is in
+            flight: each change simply supersedes the previous fetch, so the
+            controls stay live and never swallow a keystroke. */}
+        <div className="flex flex-wrap items-end justify-between gap-3 border-b border-line p-4">
+          <div className="min-w-[13rem] flex-1">
+            <label
+              htmlFor="user-search"
+              className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-ink-500"
+            >
+              Search users
+            </label>
+            <Input
+              id="user-search"
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Email address"
+              leading={<Search />}
+            />
+          </div>
           <Button
             variant="primary"
             icon={<Plus />}
-            disabled={isFirstLoad}
+            disabled={showSkeleton}
             onClick={() => setCreateOpen(true)}
           >
             Create user
           </Button>
         </div>
 
-        {isFirstLoad ? (
+        {!showSkeleton && users.length > 0 && (
+          <p className="border-b border-line px-4 py-3 text-[13px] text-ink-500">
+            Showing{" "}
+            <span className="tabular font-medium text-ink-800">{users.length}</span>{" "}
+            {users.length === 1 ? "user" : "users"}
+            {mayHaveMore && " · more available"}
+            {isRefreshing && " · refreshing…"}
+          </p>
+        )}
+
+        {showSkeleton ? (
           <SkeletonRows rows={5} columns={5} />
         ) : users.length === 0 ? (
-          <EmptyState
-            icon={Users}
-            title="No users in this city yet"
-            description="Create the organizer, reviewer and admin accounts for this city. Agency reviewers are assigned to an agency; organizers and admins are city-wide."
-            action={
-              <Button variant="primary" icon={<Plus />} onClick={() => setCreateOpen(true)}>
-                Create user
-              </Button>
-            }
-          />
+          hasSearch ? (
+            <EmptyState
+              icon={SearchX}
+              title="No users match this search"
+              description={`No user in this city has “${search}” in their email address.`}
+              action={
+                <Button variant="subtle" size="sm" onClick={() => setQuery("")}>
+                  Clear search
+                </Button>
+              }
+            />
+          ) : (
+            <EmptyState
+              icon={Users}
+              title="No users in this city yet"
+              description="Create the organizer, reviewer and admin accounts for this city. Agency reviewers are assigned to an agency; organizers and admins are city-wide."
+              action={
+                <Button variant="primary" icon={<Plus />} onClick={() => setCreateOpen(true)}>
+                  Create user
+                </Button>
+              }
+            />
+          )
         ) : (
           <>
             <UserTable
               users={users}
               selfId={selfId}
+              sort={sort}
+              onSort={onSort}
               onEdit={setEditing}
               onDelete={setDeleting}
             />
@@ -177,11 +251,15 @@ export function AdminUsersList() {
 function UserTable({
   users,
   selfId,
+  sort,
+  onSort,
   onEdit,
   onDelete,
 }: {
   users: AdminUserResponse[];
   selfId: string | undefined;
+  sort: { key: SortKey; direction: "asc" | "desc" };
+  onSort: (key: string) => void;
   onEdit: (user: AdminUserResponse) => void;
   onDelete: (user: AdminUserResponse) => void;
 }) {
@@ -193,10 +271,20 @@ function UserTable({
           <caption className="sr-only">Users in this city</caption>
           <TableHead>
             <TableRow className="hover:bg-transparent">
-              <TableHeadCell>User</TableHeadCell>
+              <SortableHeadCell
+                label="User"
+                sortKey="email"
+                sort={sort}
+                onSort={onSort}
+              />
               <TableHeadCell>Role</TableHeadCell>
               <TableHeadCell>Agency</TableHeadCell>
-              <TableHeadCell>Created</TableHeadCell>
+              <SortableHeadCell
+                label="Created"
+                sortKey="created_at"
+                sort={sort}
+                onSort={onSort}
+              />
               <TableHeadCell>
                 <span className="sr-only">Actions</span>
               </TableHeadCell>

@@ -3,6 +3,7 @@ import {
   PAGE_SIZE,
   type AdminApplicationHistoryResponse,
   type AdminUserCreate,
+  type AdminUserListParams,
   type AdminUserResponse,
   type AdminUserUpdate,
   type AgencyResponse,
@@ -296,17 +297,26 @@ export function deleteAdminAgency(id: string, { token, signal }: CallOptions): P
 /* --- Admin Users ---------------------------------------------------------- */
 
 /**
- * Every user in the admin's city, newest first.
+ * Every user in the admin's city, server-sorted and searchable.
  *
+ * `q` is matched against email and `sort`/`order` set the column order in the
+ * database, so "load more" pages a single stable result set rather than
+ * whatever slice happens to be in the browser. Defaults stay newest first.
  * Same pagination contract as the other admin lists (server caps `limit` at
  * 100). The response is deliberately hash-free: `AdminUserResponse` is the only
  * user shape this API ever returns.
  */
 export function listAdminUsers(
-  params: { offset?: number; limit?: number },
+  params: AdminUserListParams,
   { token, signal }: CallOptions,
 ): Promise<AdminUserResponse[]> {
-  const search = query({ offset: params.offset, limit: params.limit ?? PAGE_SIZE });
+  const search = query({
+    q: params.q,
+    sort: params.sort,
+    order: params.order,
+    offset: params.offset,
+    limit: params.limit ?? PAGE_SIZE,
+  });
   return api.get<AdminUserResponse[]>(`/admin/users${search}`, { token, signal });
 }
 

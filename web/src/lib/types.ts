@@ -210,6 +210,16 @@ export interface ReviewTaskListParams {
   limit?: number;
 }
 
+export interface AdminUserListParams {
+  /** Free-text search over email, matched by the server across the whole tenant. */
+  q?: string;
+  /** Column the server orders by; defaults to newest first. */
+  sort?: "email" | "created_at";
+  order?: "asc" | "desc";
+  offset?: number;
+  limit?: number;
+}
+
 /** Matches the server-side `limit` cap, so the UI never asks for more. */
 export { PAGE_SIZE } from "./constants";
 
