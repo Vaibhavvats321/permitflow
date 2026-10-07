@@ -81,6 +81,9 @@ class Agency(Base):
     name: Mapped[str] = mapped_column(String(255))
     tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    # Attendance above this value makes the agency a required reviewer.
+    # NULL means the agency is only ever required by the routing matrix.
+    attendance_threshold: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     tenant: Mapped["Tenant"] = relationship()
 

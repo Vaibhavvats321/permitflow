@@ -23,13 +23,13 @@ import {
 import {
   CreateAgencyDialog,
   DeleteAgencyDialog,
-  RenameAgencyDialog,
+  EditAgencyDialog,
 } from "./agency-dialogs";
 
 /**
  * The City Admin's agency list.
  *
- * Read-plus-mutate: rows link to the agency's detail view, and the rename and
+ * Read-plus-mutate: rows link to the agency's detail view, and the edit and
  * delete actions open dialogs that talk to the admin agency endpoints directly.
  * The list only refreshes after a confirmed success, so a refused deletion
  * leaves the row exactly where it was rather than pretending it is gone.
@@ -58,7 +58,7 @@ export function AdminAgenciesList() {
   );
 
   const [createOpen, setCreateOpen] = useState(false);
-  const [renaming, setRenaming] = useState<AgencyResponse | null>(null);
+  const [editing, setEditing] = useState<AgencyResponse | null>(null);
   const [deleting, setDeleting] = useState<AgencyResponse | null>(null);
 
   if (error) {
@@ -103,7 +103,7 @@ export function AdminAgenciesList() {
         </div>
 
         {isFirstLoad ? (
-          <SkeletonRows rows={5} columns={3} />
+          <SkeletonRows rows={5} columns={4} />
         ) : agencies.length === 0 ? (
           <EmptyState
             icon={Building2}
@@ -119,7 +119,7 @@ export function AdminAgenciesList() {
           <>
             <AgencyTable
               agencies={agencies}
-              onRename={setRenaming}
+              onEdit={setEditing}
               onDelete={setDeleting}
             />
 
@@ -148,10 +148,10 @@ export function AdminAgenciesList() {
         />
       )}
 
-      {renaming && (
-        <RenameAgencyDialog
-          agency={renaming}
-          onClose={() => setRenaming(null)}
+      {editing && (
+        <EditAgencyDialog
+          agency={editing}
+          onClose={() => setEditing(null)}
           onDone={reload}
         />
       )}
@@ -171,11 +171,11 @@ export function AdminAgenciesList() {
 
 function AgencyTable({
   agencies,
-  onRename,
+  onEdit,
   onDelete,
 }: {
   agencies: AgencyResponse[];
-  onRename: (agency: AgencyResponse) => void;
+  onEdit: (agency: AgencyResponse) => void;
   onDelete: (agency: AgencyResponse) => void;
 }) {
   return (
@@ -187,6 +187,7 @@ function AgencyTable({
           <TableHead>
             <TableRow className="hover:bg-transparent">
               <TableHeadCell>Agency</TableHeadCell>
+              <TableHeadCell>Attendance threshold</TableHeadCell>
               <TableHeadCell>Created</TableHeadCell>
               <TableHeadCell>
                 <span className="sr-only">Actions</span>
@@ -198,7 +199,7 @@ function AgencyTable({
               <AgencyRow
                 key={agency.id}
                 agency={agency}
-                onRename={onRename}
+                onEdit={onEdit}
                 onDelete={onDelete}
               />
             ))}
@@ -220,10 +221,16 @@ function AgencyTable({
                   <span aria-hidden className="mx-1.5">
                     ·
                   </span>
+                  {agency.attendance_threshold == null
+                    ? "No attendance rule"
+                    : `Over ${agency.attendance_threshold.toLocaleString()} attendees`}
+                  <span aria-hidden className="mx-1.5">
+                    ·
+                  </span>
                   Created {formatDate(agency.created_at)}
                 </p>
               </div>
-              <RowActions agency={agency} onRename={onRename} onDelete={onDelete} />
+              <RowActions agency={agency} onEdit={onEdit} onDelete={onDelete} />
             </div>
           </li>
         ))}
@@ -234,11 +241,11 @@ function AgencyTable({
 
 function AgencyRow({
   agency,
-  onRename,
+  onEdit,
   onDelete,
 }: {
   agency: AgencyResponse;
-  onRename: (agency: AgencyResponse) => void;
+  onEdit: (agency: AgencyResponse) => void;
   onDelete: (agency: AgencyResponse) => void;
 }) {
   return (
@@ -252,12 +259,21 @@ function AgencyRow({
         </span>
       </TableCell>
       <TableCell>
+        {/* "—" means no attendance rule at all: the agency joins only through
+            routing rules. Anything else is a strictly-greater-than value. */}
+        <span className="whitespace-nowrap text-[13px] text-ink-500">
+          {agency.attendance_threshold == null
+            ? "—"
+            : `Over ${agency.attendance_threshold.toLocaleString()}`}
+        </span>
+      </TableCell>
+      <TableCell>
         <span className="whitespace-nowrap text-[13px] text-ink-500">
           {formatDate(agency.created_at)}
         </span>
       </TableCell>
       <TableCell>
-        <RowActions agency={agency} onRename={onRename} onDelete={onDelete} />
+        <RowActions agency={agency} onEdit={onEdit} onDelete={onDelete} />
       </TableCell>
     </TableRow>
   );
@@ -265,11 +281,11 @@ function AgencyRow({
 
 function RowActions({
   agency,
-  onRename,
+  onEdit,
   onDelete,
 }: {
   agency: AgencyResponse;
-  onRename: (agency: AgencyResponse) => void;
+  onEdit: (agency: AgencyResponse) => void;
   onDelete: (agency: AgencyResponse) => void;
 }) {
   return (
@@ -279,10 +295,10 @@ function RowActions({
         size="sm"
         icon={<Pencil aria-hidden />}
         className="text-ink-500 hover:text-ink-800"
-        aria-label={`Rename ${agency.name}`}
-        onClick={() => onRename(agency)}
+        aria-label={`Edit ${agency.name}`}
+        onClick={() => onEdit(agency)}
       >
-        Rename
+        Edit
       </Button>
       <Button
         variant="ghost"

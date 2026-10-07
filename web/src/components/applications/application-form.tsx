@@ -11,10 +11,21 @@ import Link from "next/link";
 import { useRouter, useParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 import { useToken } from "@/lib/auth";
-import { createApplication, getApplication, updateApplication } from "@/lib/endpoints";
+import {
+  createApplication,
+  getApplication,
+  listAgencies,
+  updateApplication,
+} from "@/lib/endpoints";
 import { toApiTimestamp, toLocalInputValue } from "@/lib/format";
+import { thresholdRequiredAgencies } from "@/lib/routing";
 import { useApi, useMutation } from "@/lib/use-api";
-import { EVENT_TYPES, type ApplicationWrite, type EventType } from "@/lib/types";
+import {
+  EVENT_TYPES,
+  type AgencyResponse,
+  type ApplicationWrite,
+  type EventType,
+} from "@/lib/types";
 import { eventTypeDescription } from "@/lib/status";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,7 +38,6 @@ import {
 import { Panel } from "@/components/ui/card";
 import { InlineError } from "@/components/ui/empty-state";
 import { useToast } from "@/components/ui/toast";
-import { LARGE_EVENT_THRESHOLD } from "@/lib/constants";
 import { Field, Input, Textarea } from "@/components/ui/input";
 
 /**
@@ -36,7 +46,7 @@ import { Field, Input, Textarea } from "@/components/ui/input";
  * One component serves both routes. The only difference between creating a draft
  * and correcting one is the endpoint, the page title and whether the server
  * already has values — so a second form would be two copies of the same
- * validation and two places for the Fire threshold hint to go stale.
+ * validation and two places for the per-agency threshold hint to go stale.
  *
  * Validation is deliberately permissive on purpose. The server decides what makes
  * an application *submittable* (it rejects a submit with a list of missing
@@ -125,6 +135,15 @@ export function ApplicationForm({ mode }: { mode: "create" | "edit" }) {
       [isEdit, applicationId, token],
     ),
     [isEdit, applicationId, token],
+  );
+
+  // The city's agencies and their attendance thresholds. Used only for the
+  // advisory hint under the attendance field; submit routing is recomputed on
+  // the server, so a slow or failed fetch degrades to no hint, never to wrong
+  // routing.
+  const agencies = useApi<AgencyResponse[]>(
+    useCallback((signal) => listAgencies({ token, signal }), [token]),
+    [token],
   );
 
   const [state, setState] = useState<FormState>(BLANK);
@@ -227,7 +246,13 @@ export function ApplicationForm({ mode }: { mode: "create" | "edit" }) {
     return Number.isFinite(parsed) ? parsed : null;
   }, [state.expected_attendance]);
 
-  const triggersFireReview = attendanceNumber !== null && attendanceNumber > LARGE_EVENT_THRESHOLD;
+  // Agencies whose stored threshold this attendance exceeds. Same rule the
+  // server applies at submit time, read from GET /agencies rather than a
+  // hardcoded constant, so an admin changing Fire's threshold changes this hint.
+  const thresholdHits = useMemo(
+    () => thresholdRequiredAgencies(agencies.data ?? [], attendanceNumber),
+    [agencies.data, attendanceNumber],
+  );
 
   const missingForSubmission = useMemo(
     () =>
@@ -401,11 +426,22 @@ export function ApplicationForm({ mode }: { mode: "create" | "edit" }) {
             htmlFor="application-expected_attendance"
             error={errors.expected_attendance}
             hint={
-              triggersFireReview ? (
+              thresholdHits.length > 0 ? (
                 <span className="flex items-start gap-1.5 text-attention-ink">
                   <Info aria-hidden className="mt-0.5 size-3.5 shrink-0" />
-                  Above {LARGE_EVENT_THRESHOLD.toLocaleString()}, the fire department is
-                  added to the review automatically.
+                  {thresholdHits.length === 1 ? (
+                    <>
+                      Above{" "}
+                      {thresholdHits[0].attendance_threshold!.toLocaleString()},
+                      {thresholdHits[0].name} is added to the review
+                      automatically.
+                    </>
+                  ) : (
+                    <>
+                      {thresholdHits.map((agency) => agency.name).join(", ")} are
+                      added to the review automatically at this attendance.
+                    </>
+                  )}
                 </span>
               ) : (
                 "Total number of people expected across the event."

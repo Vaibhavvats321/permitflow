@@ -5,7 +5,6 @@ import {
   Building2,
   CheckCircle2,
   Clock,
-  Flame,
   MessageSquare,
   Pencil,
 } from "lucide-react";
@@ -13,7 +12,11 @@ import { useCallback } from "react";
 import { useParams } from "next/navigation";
 import { ApiError } from "@/lib/api";
 import { useToken } from "@/lib/auth";
-import { getAdminApplication, getAdminApplicationHistory } from "@/lib/endpoints";
+import {
+  getAdminApplication,
+  getAdminApplicationHistory,
+  listAgencies,
+} from "@/lib/endpoints";
 import {
   formatDate,
   formatDateRange,
@@ -21,8 +24,10 @@ import {
   formatRelative,
 } from "@/lib/format";
 import { applicationStatus, isEditable, reviewStatus } from "@/lib/status";
+import { thresholdRequiredAgencies } from "@/lib/routing";
 import type {
   AdminApplicationHistoryResponse,
+  AgencyResponse,
   AgencyReviewStatus,
   ApplicationResponse,
 } from "@/lib/types";
@@ -64,7 +69,19 @@ export function AdminApplicationDetail() {
     [token, applicationId],
   );
 
+  // Advisory thresholds for the attendance badge; the fetch failing only hides
+  // the badge, never the page.
+  const agencies = useApi<AgencyResponse[]>(
+    useCallback((signal) => listAgencies({ token, signal }), [token]),
+    [token],
+  );
+
   const { data, error, isLoading, reload } = application;
+
+  const thresholdHits = thresholdRequiredAgencies(
+    agencies.data ?? [],
+    data?.expected_attendance,
+  );
 
   if (isLoading) return <DetailSkeleton />;
 
@@ -166,10 +183,23 @@ export function AdminApplicationDetail() {
                         <span className="tabular">
                           {formatNumber(data.expected_attendance)} people
                         </span>
-                        {data.expected_attendance > 5000 && (
+                        {thresholdHits.length > 0 && (
                           <span className="mt-1.5 flex items-center gap-1.5 text-[13px] text-attention-ink">
-                            <Flame aria-hidden className="size-3.5 shrink-0" />
-                            Large event — fire review added automatically
+                            <Building2 aria-hidden className="size-3.5 shrink-0" />
+                            {thresholdHits.length === 1 ? (
+                              <>
+                                Over{" "}
+                                {thresholdHits[0].attendance_threshold!.toLocaleString()}{" "}
+                                — {thresholdHits[0].name} review added automatically
+                              </>
+                            ) : (
+                              <>
+                                {thresholdHits
+                                  .map((agency) => agency.name)
+                                  .join(", ")}{" "}
+                                reviews added automatically
+                              </>
+                            )}
                           </span>
                         )}
                       </>

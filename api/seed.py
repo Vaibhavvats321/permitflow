@@ -47,11 +47,15 @@ class DemoUser:
     agency: str | None = None  # agency name; None means no agency
 
 
-# Fire is always required above 5,000 expected attendees, so the base matrix
-# omits it and the routing service adds it dynamically.
+# Fire is only required above its own attendance threshold (5,000), so the
+# base matrix omits it and the routing service adds it dynamically.
 BASE_REQUIRED = ("Police", "Health")
 
 ALL_AGENCIES = ("Police", "Fire", "Health")
+
+# Per-agency attendance thresholds: attendance strictly above the value makes
+# the agency a required reviewer. Converged on every seed run, like the matrix.
+AGENCY_THRESHOLDS = {"Police": 6000, "Fire": 5000, "Health": 10000}
 
 ALL_EVENT_TYPES = (
     EventType.MARATHON,
@@ -99,10 +103,20 @@ def seed_tenant(db: Session, name: str, users: list[DemoUser]) -> Tenant:
             )
         ).scalar_one_or_none()
         if agency is None:
-            agency = Agency(name=agency_name, tenant_id=tenant.id)
+            agency = Agency(
+                name=agency_name,
+                tenant_id=tenant.id,
+                attendance_threshold=AGENCY_THRESHOLDS[agency_name],
+            )
             db.add(agency)
             db.flush()
-            print(f"    + agency {agency_name}")
+            print(f"    + agency {agency_name} (threshold {AGENCY_THRESHOLDS[agency_name]})")
+        elif agency.attendance_threshold != AGENCY_THRESHOLDS[agency_name]:
+            agency.attendance_threshold = AGENCY_THRESHOLDS[agency_name]
+            db.flush()
+            print(
+                f"    ~ agency {agency_name} threshold -> {AGENCY_THRESHOLDS[agency_name]}"
+            )
         agencies[agency_name] = agency
 
     # Routing rules: replace the set per (tenant, event_type) so a changed

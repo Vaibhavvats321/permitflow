@@ -5,7 +5,6 @@ import {
   Building2,
   CheckCircle2,
   Clock,
-  Flame,
   MessageSquare,
   Pencil,
   RotateCcw,
@@ -19,6 +18,7 @@ import { useToken } from "@/lib/auth";
 import {
   getApplication,
   getApplicationHistory,
+  listAgencies,
   resubmitApplication,
   submitApplication,
 } from "@/lib/endpoints";
@@ -35,7 +35,9 @@ import {
   isEditable,
   reviewStatus,
 } from "@/lib/status";
+import { thresholdRequiredAgencies } from "@/lib/routing";
 import type {
+  AgencyResponse,
   AgencyReviewStatus,
   ApplicationHistoryResponse,
   ApplicationResponse,
@@ -84,7 +86,20 @@ export function ApplicationDetail() {
     [token, applicationId],
   );
 
+  // The city's agencies and their attendance thresholds, for the advisory
+  // badges below. A failed fetch hides the badges only — which agencies a
+  // submission actually reaches is the server's decision at submit time.
+  const agencies = useApi<AgencyResponse[]>(
+    useCallback((signal) => listAgencies({ token, signal }), [token]),
+    [token],
+  );
+
   const { data, error, isLoading, reload, setData } = application;
+
+  const thresholdHits = thresholdRequiredAgencies(
+    agencies.data ?? [],
+    data?.expected_attendance,
+  );
 
   if (isLoading) return <DetailSkeleton />;
 
@@ -224,10 +239,21 @@ export function ApplicationDetail() {
                           <span className="tabular">
                             {formatNumber(data.expected_attendance)} people
                           </span>
-                          {data.expected_attendance > 5000 && (
+                          {thresholdHits.length > 0 && (
                             <span className="mt-1.5 flex items-center gap-1.5 text-[13px] text-attention-ink">
-                              <Flame aria-hidden className="size-3.5 shrink-0" />
-                              Large event — fire review added automatically
+                              <Building2 aria-hidden className="size-3.5 shrink-0" />
+                              {thresholdHits.length === 1 ? (
+                                <>
+                                  Over{" "}
+                                  {thresholdHits[0].attendance_threshold!.toLocaleString()}{" "}
+                                  — {thresholdHits[0].name} review added automatically
+                                </>
+                              ) : (
+                                <>
+                                  {thresholdHits.map((agency) => agency.name).join(", ")}{" "}
+                                  reviews added automatically
+                                </>
+                              )}
                             </span>
                           )}
                         </>
@@ -603,10 +629,11 @@ function HistoryPanel({
 /**
  * Submit confirmation.
  *
- * The dialog states which agencies will be asked and calls out the fire-department
- * override when it applies, because that is the part an organizer is most likely
- * to be surprised by and cannot predict. The list comes from the submit response,
- * so it is only shown after the fact — before that, the copy explains the rule.
+ * The dialog states which agencies will be asked and calls out any
+ * attendance-threshold additions when they apply, because that is the part an
+ * organizer is most likely to be surprised by and cannot predict. The list comes
+ * from the submit response, so it is only shown after the fact — before that,
+ * the copy explains the rule using the city's live thresholds.
  */
 function SubmitDialog({
   open,
@@ -622,13 +649,21 @@ function SubmitDialog({
   const token = useToken();
   const submit = useMutation(() => submitApplication(application.id, { token }));
 
+  const agencies = useApi<AgencyResponse[]>(
+    useCallback((signal) => listAgencies({ token, signal }), [token]),
+    [token],
+  );
+
   const incomplete =
     application.start_date === null ||
     application.end_date === null ||
     !application.location ||
     application.expected_attendance === null;
 
-  const triggersFire = (application.expected_attendance ?? 0) > 5000;
+  const thresholdHits = thresholdRequiredAgencies(
+    agencies.data ?? [],
+    application.expected_attendance,
+  );
 
   return (
     <ConfirmDialog
@@ -661,12 +696,23 @@ function SubmitDialog({
           </div>
         )}
 
-        {triggersFire && (
+        {thresholdHits.length > 0 && (
           <div className="flex items-start gap-2.5 rounded-control border border-line bg-surface-muted px-3 py-2.5">
-            <Flame aria-hidden className="mt-0.5 size-4 shrink-0 text-ink-500" />
+            <Building2 aria-hidden className="mt-0.5 size-4 shrink-0 text-ink-500" />
             <p className="text-[13px] leading-relaxed text-ink-600">
-              Attendance of {formatNumber(application.expected_attendance)} is above
-              5,000, so the fire department is added to the review automatically.
+              {thresholdHits.length === 1 ? (
+                <>
+                  Attendance of {formatNumber(application.expected_attendance)} is over{" "}
+                  {thresholdHits[0].attendance_threshold!.toLocaleString()}, so{" "}
+                  {thresholdHits[0].name} is added to the review automatically.
+                </>
+              ) : (
+                <>
+                  Attendance of {formatNumber(application.expected_attendance)} also
+                  adds {thresholdHits.map((agency) => agency.name).join(", ")} to the
+                  review automatically.
+                </>
+              )}
             </p>
           </div>
         )}

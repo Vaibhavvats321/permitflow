@@ -14,14 +14,14 @@ import { DetailList, DetailRow, Panel } from "@/components/ui/card";
 import { ErrorState } from "@/components/ui/empty-state";
 import { SkeletonText } from "@/components/ui/skeleton";
 import { PageBody, PageHeader } from "@/components/layout/page-header";
-import { DeleteAgencyDialog, RenameAgencyDialog } from "../agency-dialogs";
+import { DeleteAgencyDialog, EditAgencyDialog } from "../agency-dialogs";
 
 /**
  * One agency, as the City Admin sees it.
  *
  * The detail endpoint is the source of truth — the page renders whatever it
- * returns and never merges in a row cached from the list, so a rename done
- * elsewhere cannot be masked here. Rename updates the page in place from the
+ * returns and never merges in a row cached from the list, so an edit done
+ * elsewhere cannot be masked here. Edit updates the page in place from the
  * PATCH response; delete navigates back to the list only on actual success.
  */
 export function AdminAgencyDetail() {
@@ -40,7 +40,7 @@ export function AdminAgencyDetail() {
 
   const { data, error, isLoading, reload, setData } = agency;
 
-  const [renameOpen, setRenameOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   if (isLoading) return <DetailSkeleton />;
@@ -90,8 +90,8 @@ export function AdminAgencyDetail() {
         ]}
         actions={
           <>
-            <Button variant="default" icon={<Pencil />} onClick={() => setRenameOpen(true)}>
-              Rename
+            <Button variant="default" icon={<Pencil />} onClick={() => setEditOpen(true)}>
+              Edit
             </Button>
             <Button variant="danger" icon={<Trash2 />} onClick={() => setDeleteOpen(true)}>
               Delete
@@ -113,6 +113,17 @@ export function AdminAgencyDetail() {
           <Panel title="Agency details" bodyClassName="px-5 pb-2 pt-1">
             <DetailList>
               <DetailRow label="Name">{data.name}</DetailRow>
+              <DetailRow label="Attendance threshold">
+                {data.attendance_threshold == null ? (
+                  <span className="text-ink-400">
+                    None — required only by routing rules
+                  </span>
+                ) : (
+                  <span className="tabular">
+                    Over {data.attendance_threshold.toLocaleString()} attendees
+                  </span>
+                )}
+              </DetailRow>
               <DetailRow label="Agency ID">
                 <code className="break-all text-[13px] text-ink-600">{data.id}</code>
               </DetailRow>
@@ -127,16 +138,16 @@ export function AdminAgencyDetail() {
 
           <p className="px-1 text-[13px] leading-relaxed text-ink-400">
             Routing rules and review tasks reference this agency. The city refuses
-            to delete an agency while any of them still point at it, and rename
-            changes only the name shown — nothing is re-routed.
+            to delete an agency while any of them still point at it, and edits
+            change only this agency — the next submission picks the change up.
           </p>
         </div>
       </PageBody>
 
-      {renameOpen && (
-        <RenameAgencyDialog
+      {editOpen && (
+        <EditAgencyDialog
           agency={data}
-          onClose={() => setRenameOpen(false)}
+          onClose={() => setEditOpen(false)}
           onDone={(updated) => setData(updated)}
         />
       )}

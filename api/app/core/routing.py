@@ -7,19 +7,22 @@ Two rules, in this order:
 
   1. The tenant's routing matrix (`event_type_agency_rules`), which a City Admin
      configures: this event type always needs these agencies.
-  2. The attendance override: an event expected to draw more than 5,000 people
-     always needs Fire as well.
+  2. The attendance thresholds: any agency whose `attendance_threshold` the
+     expected attendance exceeds is required as well. Each agency carries its
+     own value (Fire 5,000, Police 6,000, ...), stored in the database and
+     editable from the agency management screen, so changing a threshold takes
+     effect on the next submission without a code change.
 
-Rule 2 is an override rather than a seed convenience. The seeded routing matrix
-deliberately leaves Fire out of the base set, so if rule 2 were dropped the
-threshold would silently stop firing and nothing would look wrong in the demo.
+Rule 2 is additive: the union is keyed by agency id, so an agency that both
+appears in the matrix and exceeds its threshold still gets exactly one review
+task.
 
-The threshold is `> 5000`, not `>= 5000`: the brief says "attendance over 5,000
-always adds Fire", so exactly 5,000 does not trigger it.
+The comparison is strictly greater than, never >=: attendance equal to an
+agency's threshold does not make the event large enough for that agency.
 
 This module is pure logic over a session. It performs no writes and raises no
-HTTP errors, so it can be reused by the eventual resubmission path without
-dragging route concerns along.
+HTTP errors, so it can be reused by the resubmission path without dragging
+route concerns along.
 """
 
 from __future__ import annotations
@@ -28,13 +31,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Agency, Application, EventTypeAgencyRule
-
-# "Rule: attendance over 5,000 always adds Fire." Strictly greater than.
-LARGE_EVENT_ATTENDANCE_THRESHOLD = 5000
-
-# Matched by name within the tenant. Agencies are tenant-scoped, so this can
-# only ever resolve to the requesting city's own Fire department.
-LARGE_EVENT_REQUIRED_AGENCY = "Fire"
 
 
 class RoutingError(RuntimeError):
@@ -69,13 +65,24 @@ def _agencies_for_event_type(
     )
 
 
-def _large_event_agencies(session: Session, tenant_id) -> list[Agency]:
+def _threshold_agencies(
+    session: Session, tenant_id, attendance: int | None
+) -> list[Agency]:
+    """
+    Agencies whose attendance threshold the given attendance exceeds.
+
+    A missing attendance never matches: an application without a count cannot
+    make any threshold fire, and NULL thresholds mean "matrix only".
+    """
+    if attendance is None:
+        return []
     return list(
         session.execute(
             select(Agency)
             .where(
                 Agency.tenant_id == tenant_id,
-                Agency.name == LARGE_EVENT_REQUIRED_AGENCY,
+                Agency.attendance_threshold.is_not(None),
+                Agency.attendance_threshold < attendance,
             )
             .order_by(Agency.name)
         )
@@ -83,19 +90,28 @@ def _large_event_agencies(session: Session, tenant_id) -> list[Agency]:
     )
 
 
-def is_large_event(application: Application) -> bool:
-    """Whether the attendance override applies. A missing count is not large."""
-    attendance = application.expected_attendance
-    return attendance is not None and attendance > LARGE_EVENT_ATTENDANCE_THRESHOLD
+def agencies_required_by_attendance(
+    session: Session, application: Application
+) -> list[Agency]:
+    """
+    Agencies required because the expected attendance exceeds their threshold.
+
+    Read from the database on every call, so an admin lowering (or raising) a
+    threshold immediately changes which agencies the next submission routes to.
+    """
+    return _threshold_agencies(
+        session, application.tenant_id, application.expected_attendance
+    )
 
 
 def required_agencies(session: Session, application: Application) -> list[Agency]:
     """
     Agencies that must review this application, in a stable order.
 
-    A set union, so an event type that already lists Fire explicitly does not
-    get two Fire tasks: the attendance override is additive, not duplicative.
-    Ordered by name for a predictable response and deterministic tests.
+    A set union keyed by agency id, so an agency required by both the matrix
+    and its attendance threshold does not get two tasks: the threshold rule is
+    additive, not duplicative. Ordered by name for a predictable response and
+    deterministic tests.
     """
     agencies = {
         agency.id: agency
@@ -104,9 +120,9 @@ def required_agencies(session: Session, application: Application) -> list[Agency
         )
     }
 
-    if is_large_event(application):
-        agencies.update(
-            (agency.id, agency) for agency in _large_event_agencies(session, application.tenant_id)
-        )
+    agencies.update(
+        (agency.id, agency)
+        for agency in agencies_required_by_attendance(session, application)
+    )
 
     return sorted(agencies.values(), key=lambda agency: agency.name)

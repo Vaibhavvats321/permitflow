@@ -1,14 +1,10 @@
 /**
- * Business rules the frontend mirrors from the backend.
+ * Shared frontend constants.
  *
- * Each of these has a server-side counterpart in `app.core.routing`, and each
- * carries the threshold's direction with it — `> 5000`, not `>= 5000`, because
- * the brief says "over 5,000" and the copy in the form has to match the copy the
- * server acts on.
+ * Attendance thresholds deliberately live in the database, not here: each
+ * agency carries its own value, served by GET /agencies and mirrored for UI
+ * copy by `lib/routing.ts`. Nothing in the frontend hardcodes a limit.
  */
-
-/** Attendance above which the fire department is added to the review. */
-export const LARGE_EVENT_THRESHOLD = 5000;
 
 /** The server's default and maximum page size for both list endpoints. */
 export const PAGE_SIZE = 50;

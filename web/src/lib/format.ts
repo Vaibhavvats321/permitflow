@@ -67,8 +67,9 @@ export function formatNumber(value: number | null | undefined): string {
 /**
  * Attendance with the thousands separator plus the unit, or a dash.
  *
- * Also the input to the Fire-review hint: the server's threshold is strictly
- * greater than 5,000, so the copy says "more than" rather than "5,000 or more".
+ * Also the input to the agency-threshold hints: each agency's rule is strictly
+ * greater than its stored value, so the copy says "over N" rather than "N or
+ * more".
  */
 export function formatAttendance(value: number | null | undefined): string {
   return typeof value === "number" ? `${numberFormatter.format(value)} attendees` : "—";

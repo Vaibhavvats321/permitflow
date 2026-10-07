@@ -93,12 +93,22 @@ class TenantFixture:
         session.flush()
 
         # Agencies and routing rules mirror api/seed.py so tests exercise the
-        # same shape as the demo data. Fire is left out of the base matrix: the
-        # attendance override in app/core/routing.py is what adds it, so a
-        # fixture that included it would make the threshold untestable.
+        # same shape as the demo data. Each agency carries its own attendance
+        # threshold (the examples from the brief): attendance strictly above
+        # the value makes the agency required even without a matrix rule. Fire
+        # is left out of the base matrix, so the threshold rule in
+        # app/core/routing.py is what adds it and stays testable.
         self.agencies = {
-            agency_name: Agency(name=agency_name, tenant_id=self.tenant.id)
-            for agency_name in ("Police", "Fire", "Health")
+            agency_name: Agency(
+                name=agency_name,
+                tenant_id=self.tenant.id,
+                attendance_threshold=attendance_threshold,
+            )
+            for agency_name, attendance_threshold in (
+                ("Police", 6000),
+                ("Fire", 5000),
+                ("Health", 10000),
+            )
         }
         session.add_all(self.agencies.values())
         session.flush()

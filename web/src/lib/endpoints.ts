@@ -255,6 +255,18 @@ export function getAdminApplicationHistory(
 /* --- Admin Agencies ------------------------------------------------------- */
 
 /**
+ * Every agency in the caller's city, with attendance thresholds.
+ *
+ * Unlike the admin agency endpoints this one is open to every signed-in role:
+ * the application flow needs the same thresholds submit routing uses to say
+ * which agencies a given attendance will require. Read-only by design —
+ * creating and editing stays under /admin/agencies.
+ */
+export function listAgencies({ token, signal }: CallOptions): Promise<AgencyResponse[]> {
+  return api.get<AgencyResponse[]>("/agencies", { token, signal });
+}
+
+/**
  * The city's agencies, ordered by name server-side.
  *
  * Paginated like the other admin lists: the server caps `limit` at 100, so a

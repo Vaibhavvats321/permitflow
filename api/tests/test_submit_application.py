@@ -192,6 +192,122 @@ def test_submit_fire_already_required_is_not_duplicated(
     assert db.query(ReviewTask).filter(ReviewTask.application_id == draft.id).count() == 3
 
 
+def test_submit_adds_agency_whose_threshold_is_exceeded(
+    client: TestClient, tenant
+) -> None:
+    """
+    Threshold routing is per-agency and read from the database.
+
+    "Parks Department" is in no routing matrix: only its stored threshold can
+    make it required, and only when attendance is strictly above that value.
+    """
+    admin = tenant.token_for(tenant.admin)
+    organizer = tenant.token_for(tenant.organizer)
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/admin/agencies",
+            json={"name": "Parks Department", "attendance_threshold": 1000},
+            headers=auth(admin),
+        )
+        assert created.status_code == 201, created.text
+
+        over = create_draft(client, organizer, expected_attendance=1500)
+        response = submit(client, organizer, over.id)
+        assert response.status_code == 200
+        names = [a["name"] for a in response.json()["required_agencies"]]
+        assert names == ["Health", "Parks Department", "Police"]
+        assert response.json()["attendance_override_applied"] is True
+
+        # Attendance equal to the threshold is not "over" — Parks stays out.
+        exact = create_draft(client, organizer, expected_attendance=1000)
+        response = submit(client, organizer, exact.id)
+        assert response.status_code == 200
+        names = [a["name"] for a in response.json()["required_agencies"]]
+        assert names == ["Health", "Police"]
+        assert response.json()["attendance_override_applied"] is False
+
+
+def test_threshold_change_applies_to_new_submissions(
+    client: TestClient, db, tenant
+) -> None:
+    """
+    An admin's threshold edit takes effect on the next submission — no code
+    change, no restart. The brief's example: Fire 5,000 -> 8,000 stops a
+    5,500-attendance event from routing to Fire.
+    """
+    admin = tenant.token_for(tenant.admin)
+    organizer = tenant.token_for(tenant.organizer)
+    fire_id = tenant.agencies["Fire"].id
+
+    with TestClient(app) as client:
+        before = create_draft(client, organizer, expected_attendance=5500)
+        response = submit(client, organizer, before.id)
+        assert response.status_code == 200
+        assert [a["name"] for a in response.json()["required_agencies"]] == [
+            "Fire",
+            "Health",
+            "Police",
+        ]
+
+        patch = client.patch(
+            f"/admin/agencies/{fire_id}",
+            json={"name": "Fire", "attendance_threshold": 8000},
+            headers=auth(admin),
+        )
+        assert patch.status_code == 200
+        assert patch.json()["attendance_threshold"] == 8000
+
+        after = create_draft(client, organizer, expected_attendance=5500)
+        response = submit(client, organizer, after.id)
+        assert response.status_code == 200
+        assert [a["name"] for a in response.json()["required_agencies"]] == [
+            "Health",
+            "Police",
+        ]
+        assert response.json()["attendance_override_applied"] is False
+        # One task per agency, both submissions: Fire once before, none after.
+        assert (
+            db.query(ReviewTask).filter(ReviewTask.application_id == before.id).count()
+            == 3
+        )
+        assert (
+            db.query(ReviewTask).filter(ReviewTask.application_id == after.id).count()
+            == 2
+        )
+
+
+def test_agency_in_matrix_and_over_threshold_gets_one_task(
+    client: TestClient, db, tenant
+) -> None:
+    """
+    Matrix + threshold is a union keyed by agency id: an agency required by
+    both routes still gets exactly one review task.
+    """
+    admin = tenant.token_for(tenant.admin)
+    organizer = tenant.token_for(tenant.organizer)
+
+    with TestClient(app) as client:
+        # Police is in the matrix for every event type; drop its threshold far
+        # enough that the same submission exceeds it as well.
+        patch = client.patch(
+            f"/admin/agencies/{tenant.agencies['Police'].id}",
+            json={"name": "Police", "attendance_threshold": 100},
+            headers=auth(admin),
+        )
+        assert patch.status_code == 200
+
+        draft = create_draft(client, organizer, expected_attendance=500)
+        response = submit(client, organizer, draft.id)
+        assert response.status_code == 200
+
+        names = [a["name"] for a in response.json()["required_agencies"]]
+        assert names == ["Health", "Police"]  # Police once, not twice
+        assert db.query(ReviewTask).filter(
+            ReviewTask.application_id == draft.id
+        ).count() == 2
+
+
 def test_submit_is_atomic(db, client, tenant) -> None:
     """
     The status and tasks are created together.

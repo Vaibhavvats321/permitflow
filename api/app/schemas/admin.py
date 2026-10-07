@@ -51,6 +51,9 @@ class AgencyResponse(BaseModel):
     id: uuid.UUID
     name: str
     created_at: datetime
+    # Expected attendance strictly above this makes the agency a required
+    # reviewer; None means the agency is only ever required by the matrix.
+    attendance_threshold: Optional[int] = None
 
 
 class AgencyCreate(BaseModel):
@@ -59,6 +62,7 @@ class AgencyCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(max_length=255)
+    attendance_threshold: Optional[int] = Field(default=None, ge=0, le=2_000_000_000)
 
     @field_validator("name")
     @classmethod
@@ -70,11 +74,18 @@ class AgencyCreate(BaseModel):
 
 
 class AgencyUpdate(BaseModel):
-    """Payload for updating an agency (currently only name)."""
+    """
+    Payload for updating an agency's name and/or attendance threshold.
+
+    `attendance_threshold` is only applied when present in the request body:
+    omitting it leaves the current value alone, while an explicit JSON `null`
+    clears it (the agency becomes matrix-only).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(max_length=255)
+    attendance_threshold: Optional[int] = Field(default=None, ge=0, le=2_000_000_000)
 
     @field_validator("name")
     @classmethod

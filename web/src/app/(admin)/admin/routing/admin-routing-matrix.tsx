@@ -308,13 +308,13 @@ export function AdminRoutingMatrix() {
         </p>
         <p className="text-[13px] leading-relaxed text-ink-400">
           <span className="font-medium text-ink-600">
-            Fire is added automatically
+            Attendance thresholds add agencies too
           </span>{" "}
-          when an application&rsquo;s expected attendance is over 5,000 —
-          strictly greater than, so exactly 5,000 does not count. That override
-          applies on top of this matrix for every event type and cannot be
-          switched off from this screen; if Fire is already assigned here, large
-          events still get a single Fire review rather than two. Removing a rule
+          — every agency carries its own threshold on the Agencies screen, and an
+          expected attendance over that number pulls the agency in on top of this
+          matrix, for every event type. The comparison is strictly greater than,
+          so exactly 5,000 does not count against a 5,000 threshold. An agency
+          required in both places still gets a single review. Removing a rule
           never touches review tasks that already exist — new submissions follow
           the updated matrix.
         </p>

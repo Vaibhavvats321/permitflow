@@ -12,8 +12,8 @@ Produces the full demo dataset described in DEMO_SETUP.md:
   * 12 agencies (Police/Health/Fire in the four populated tenants)
   * 32 routing rules (Police + Health for each of the four event types; Fire
                  is deliberately left out of the base matrix because
-                 app/core/routing.py adds it automatically above 5,000
-                 attendance — seeding it would mask that override)
+                 app/core/routing.py adds it when attendance exceeds Fire's
+                 configured threshold — seeding it would mask that rule)
   * 40 applications (10 per populated tenant) with review tasks and audit
                  history across Submitted / Under Review / Approved /
                  Rejected / Changes Requested scenarios
@@ -40,7 +40,7 @@ Design rules, matching the phase requirements:
   be left behind.
 
   REAL BUSINESS LOGIC. Review tasks come from the actual
-  app.core.routing.required_agencies() (matrix + attendance override), status
+  app.core.routing.required_agencies() (matrix + attendance thresholds), status
   transitions go through app.core.lifecycle's guards and aggregation, audit
   actions reuse the constants defined by the API routes, and passwords are
   hashed by app.core.security.hash_password. Nothing is fabricated.
@@ -130,13 +130,15 @@ def seed_id(kind: str, *parts: str) -> uuid.UUID:
 POPULATED_CITIES = ("City A", "City B", "City C", "City D")
 ADMIN_ONLY_CITIES = ("City E", "City F")
 
-# Agencies created in each populated tenant.
+# Agencies created in each populated tenant, each with its own attendance
+# threshold: attendance strictly above the value makes the agency required.
 AGENCY_NAMES = ("Police", "Health", "Fire")
+AGENCY_THRESHOLDS = {"Police": 6000, "Fire": 5000, "Health": 10000}
 
 # Base matrix: Police + Health on every event type. Fire is intentionally
-# absent — app/core/routing.py adds Fire automatically when expected
-# attendance is strictly greater than 5,000, and a matrix that already
-# contained Fire would make that override invisible in the demo.
+# absent — app/core/routing.py adds Fire when expected attendance exceeds its
+# configured threshold (5,000), and a matrix that already contained Fire would
+# make that rule invisible in the demo.
 BASE_ROUTING_AGENCIES = ("Police", "Health")
 
 DEMO_PASSWORD = settings.DEMO_USER_PASSWORD  # documented as Demo1234!
@@ -185,17 +187,13 @@ class EventSpec:
     organizer: int  # 1 or 2 — distributes the 10 events 5/5 across organizers
     decisions: tuple[Decision, ...] = field(default_factory=tuple)
 
-    @property
-    def is_large(self) -> bool:
-        return self.attendance > 5000
-
 
 # The template covers every lifecycle state the demo must show:
 # Approved (1, 2, 9), Rejected (3, 10), Changes Requested (4),
-# Submitted/pending (5, 7), Under Review (6, 8). Three events exceed 5,000
-# attendance (1, 5, 8) so the automatic Fire routing is exercised, and the
-# decision order keeps every step inside the reviewable states enforced by
-# app.core.lifecycle (the decisive rejection is always applied last).
+# Submitted/pending (5, 7), Under Review (6, 8). Three events exceed Fire's
+# 5,000 attendance threshold (1, 5, 8) so the threshold routing is exercised,
+# and the decision order keeps every step inside the reviewable states enforced
+# by app.core.lifecycle (the decisive rejection is always applied last).
 EVENT_TEMPLATE: tuple[EventSpec, ...] = (
     EventSpec(
         slug="riverfront-marathon",
@@ -431,6 +429,10 @@ def seed_populated_tenant(db: Session, city: str, ledger: Ledger, password_hash:
             tenant_id=tenant.id,
             created_at=AGENCY_AT,
         )
+        # Converge the threshold like the routing matrix: an admin edit made
+        # against the demo data is restored by the next seed run.
+        if agency.attendance_threshold != AGENCY_THRESHOLDS[name]:
+            agency.attendance_threshold = AGENCY_THRESHOLDS[name]
         agencies[name] = agency  # type: ignore[assignment]
 
     # Routing rules: Police + Health for all four event types (see
@@ -555,9 +557,9 @@ def _simulate_submit(
     """
     Apply the same writes as POST /applications/{id}/submit.
 
-    Task set comes from the real routing logic (matrix plus the >5,000 Fire
-    override), guarded by the same completeness and non-empty checks the
-    route performs.
+    Task set comes from the real routing logic (matrix plus any agency whose
+    attendance threshold the event exceeds), guarded by the same completeness
+    and non-empty checks the route performs.
     """
     missing = missing_submission_fields(application)
     if missing:

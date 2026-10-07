@@ -195,6 +195,142 @@ def test_create_agency_duplicate_name_returns_409(client: TestClient, make_tenan
         assert "already exists" in resp2.json()["detail"]
 
 
+def test_create_agency_with_attendance_threshold(client: TestClient, make_tenant) -> None:
+    """The create form's attendance threshold round-trips through the API."""
+    tenant = make_tenant("AgencyThresholdCreate")
+    token = tenant.token_for(tenant.admin)
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"{ADMIN_PREFIX}/agencies",
+            json={"name": "Parks Department", "attendance_threshold": 7500},
+            headers=auth(token),
+        )
+        assert response.status_code == 201
+        assert response.json()["attendance_threshold"] == 7500
+
+        fetched = client.get(
+            f"{ADMIN_PREFIX}/agencies/{response.json()['id']}", headers=auth(token)
+        )
+        assert fetched.status_code == 200
+        assert fetched.json()["attendance_threshold"] == 7500
+
+
+def test_create_agency_without_threshold_defaults_to_none(
+    client: TestClient, make_tenant
+) -> None:
+    """Omitting the threshold means 'matrix only' — it comes back null."""
+    tenant = make_tenant("AgencyNoThreshold")
+    token = tenant.token_for(tenant.admin)
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"{ADMIN_PREFIX}/agencies",
+            json={"name": "Library Board"},
+            headers=auth(token),
+        )
+        assert response.status_code == 201
+        assert response.json()["attendance_threshold"] is None
+
+
+def test_create_agency_rejects_bad_threshold_values(client: TestClient, make_tenant) -> None:
+    """Negative or non-integer thresholds are a 422, never silently accepted."""
+    tenant = make_tenant("AgencyBadThreshold")
+    token = tenant.token_for(tenant.admin)
+
+    with TestClient(app) as client:
+        negative = client.post(
+            f"{ADMIN_PREFIX}/agencies",
+            json={"name": "Negative Threshold", "attendance_threshold": -1},
+            headers=auth(token),
+        )
+        assert negative.status_code == 422
+
+        non_integer = client.post(
+            f"{ADMIN_PREFIX}/agencies",
+            json={"name": "String Threshold", "attendance_threshold": "lots"},
+            headers=auth(token),
+        )
+        assert non_integer.status_code == 422
+
+
+def test_update_agency_attendance_threshold(client: TestClient, make_tenant) -> None:
+    """
+    PATCH applies an explicit threshold, leaves an omitted one alone, and
+    clears it on an explicit null — the three states the edit form sends.
+    """
+    tenant = make_tenant("AgencyThresholdUpdate")
+    token = tenant.token_for(tenant.admin)
+    fire_id = tenant.agencies["Fire"].id
+    assert tenant.agencies["Fire"].attendance_threshold == 5000
+
+    with TestClient(app) as client:
+        # The brief's example: Fire 5,000 -> 8,000.
+        updated = client.patch(
+            f"{ADMIN_PREFIX}/agencies/{fire_id}",
+            json={"name": "Fire", "attendance_threshold": 8000},
+            headers=auth(token),
+        )
+        assert updated.status_code == 200
+        assert updated.json()["attendance_threshold"] == 8000
+
+        # Omitted field: unchanged.
+        name_only = client.patch(
+            f"{ADMIN_PREFIX}/agencies/{fire_id}",
+            json={"name": "Fire"},
+            headers=auth(token),
+        )
+        assert name_only.status_code == 200
+        assert name_only.json()["attendance_threshold"] == 8000
+
+        # Explicit null: cleared (matrix-only agency).
+        cleared = client.patch(
+            f"{ADMIN_PREFIX}/agencies/{fire_id}",
+            json={"name": "Fire", "attendance_threshold": None},
+            headers=auth(token),
+        )
+        assert cleared.status_code == 200
+        assert cleared.json()["attendance_threshold"] is None
+
+        # A negative value on update is refused the same way as on create.
+        negative = client.patch(
+            f"{ADMIN_PREFIX}/agencies/{fire_id}",
+            json={"name": "Fire", "attendance_threshold": -5},
+            headers=auth(token),
+        )
+        assert negative.status_code == 422
+
+
+def test_shared_agencies_endpoint_serves_every_role(
+    client: TestClient, make_tenant
+) -> None:
+    """
+    GET /agencies exposes thresholds to non-admin roles (the application flow
+    needs them) but only for their own city, and only when signed in.
+    """
+    tenant_a = make_tenant("AgencySharedA")
+    tenant_b = make_tenant("AgencySharedB")
+    org_token = tenant_a.token_for(tenant_a.organizer)
+
+    with TestClient(app) as client:
+        created = client.post(
+            f"{ADMIN_PREFIX}/agencies",
+            json={"name": "Zoning Board", "attendance_threshold": 42},
+            headers=auth(tenant_b.token_for(tenant_b.admin)),
+        )
+        assert created.status_code == 201
+
+        response = client.get("/agencies", headers=auth(org_token))
+        assert response.status_code == 200, response.text
+        thresholds = {a["name"]: a["attendance_threshold"] for a in response.json()}
+        assert thresholds == {"Police": 6000, "Fire": 5000, "Health": 10000}
+
+        # Another city's agency (and threshold) never appears here.
+        assert all(a["name"] != "Zoning Board" for a in response.json())
+
+        assert client.get("/agencies").status_code == 401
+
+
 def test_fetch_own_tenant_agency(client: TestClient, make_tenant) -> None:
     """City Admin can fetch an agency belonging to their tenant."""
     tenant = make_tenant("AgencyFetchTenant")

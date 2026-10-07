@@ -116,7 +116,7 @@ export default function LandingPage() {
               {
                 icon: Route,
                 title: "Routed by event type",
-                body: "Each city configures which agencies review a marathon, a concert or a street fair. An event over 5,000 attendees automatically pulls in the fire department.",
+                body: "Each city configures which agencies review a marathon, a concert or a street fair — and each agency sets the attendance level that pulls it in automatically.",
                 footnote: "Organised by your city's own routing rules",
               },
               {

@@ -206,6 +206,7 @@ def create_agency(
     agency = Agency(
         name=payload.name,
         tenant_id=current_user.tenant_id,
+        attendance_threshold=payload.attendance_threshold,
     )
     session.add(agency)
     session.commit()
@@ -242,9 +243,11 @@ def update_agency(
     current_user: AdminOnly,
 ) -> AgencyResponse:
     """
-    Update an agency's name.
+    Update an agency's name and/or attendance threshold.
 
-    Name must remain unique within the tenant.
+    Name must remain unique within the tenant. The threshold is written only
+    when the field is present in the body: omitted means "unchanged", an
+    explicit null clears the rule so the agency is required by the matrix alone.
     """
     agency = session.execute(
         select(Agency).where(
@@ -269,6 +272,8 @@ def update_agency(
         raise _conflict(f"An agency named '{payload.name}' already exists in this city")
 
     agency.name = payload.name
+    if "attendance_threshold" in payload.model_fields_set:
+        agency.attendance_threshold = payload.attendance_threshold
     session.commit()
     session.refresh(agency)
 

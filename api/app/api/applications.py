@@ -46,7 +46,7 @@ from app.core.lifecycle import (
     should_reset_on_resubmission,
     resubmission_application_status,
 )
-from app.core.routing import is_large_event, required_agencies
+from app.core.routing import agencies_required_by_attendance, required_agencies
 from app.deps import CurrentUser, get_tenant_db, require_role
 from app.models import (
     Agency,
@@ -492,7 +492,9 @@ def submit_application(
     return SubmitApplicationResponse(
         application=_application_response(application),
         required_agencies=[RequiredAgency.model_validate(a) for a in agencies],
-        attendance_override_applied=is_large_event(application),
+        attendance_override_applied=bool(
+            agencies_required_by_attendance(session, application)
+        ),
     )
 
 

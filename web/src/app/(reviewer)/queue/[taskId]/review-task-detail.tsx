@@ -5,7 +5,6 @@ import {
   CalendarDays,
   CheckCircle2,
   Clock,
-  Flame,
   Info,
   MapPin,
   MessageSquare,
@@ -20,6 +19,7 @@ import { useToken } from "@/lib/auth";
 import {
   getReviewHistory,
   getReviewTask,
+  listAgencies,
   submitReviewDecision,
 } from "@/lib/endpoints";
 import {
@@ -29,14 +29,15 @@ import {
   formatRelative,
 } from "@/lib/format";
 import { applicationStatus, reviewStatus } from "@/lib/status";
+import { thresholdRequiredAgencies } from "@/lib/routing";
 import type {
+  AgencyResponse,
   ApplicationHistoryResponse,
   ReviewAction,
   ReviewTaskResponse,
 } from "@/lib/types";
 import { useApi, useMutation } from "@/lib/use-api";
 import { cn } from "@/lib/cn";
-import { LARGE_EVENT_THRESHOLD } from "@/lib/constants";
 import { StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, DetailList, DetailRow, Panel } from "@/components/ui/card";
@@ -119,11 +120,24 @@ export function ReviewTaskDetail() {
     [token, taskId],
   );
 
+  // The city's thresholds, for the advisory attendance badge below. The
+  // reviewer's own task assignment comes from the server either way — a failed
+  // fetch hides the badge, nothing else.
+  const agencies = useApi<AgencyResponse[]>(
+    useCallback((signal) => listAgencies({ token, signal }), [token]),
+    [token],
+  );
+
   const decide = useMutation((action: ReviewAction, text: string) =>
     submitReviewDecision(taskId, action, text, { token }),
   );
 
   const { data, error, isLoading, reload, setData } = task;
+
+  const thresholdHits = thresholdRequiredAgencies(
+    agencies.data ?? [],
+    data?.application.expected_attendance,
+  );
 
   if (isLoading) return <TaskSkeleton />;
 
@@ -160,7 +174,6 @@ export function ReviewTaskDetail() {
   const isRejectedOverall = data.application.status === "Rejected";
   const isActionable = data.review_status === "Pending" && !isRejectedOverall;
   const hasComment = Boolean(data.comment?.trim());
-  const isLargeEvent = (data.application.expected_attendance ?? 0) > LARGE_EVENT_THRESHOLD;
   const currentStatus = data.application.status;
 
   async function confirmDecision() {
@@ -386,11 +399,25 @@ export function ReviewTaskDetail() {
                             <Users aria-hidden className="size-3.5 text-ink-400" />
                             {formatNumber(data.application.expected_attendance)} people
                           </span>
-                          {isLargeEvent && (
+                          {thresholdHits.length > 0 && (
                             <span className="mt-1.5 flex items-center gap-1.5 text-[13px] text-attention-ink">
-                              <Flame aria-hidden className="size-3.5 shrink-0" />
-                              Above {LARGE_EVENT_THRESHOLD.toLocaleString()}, so a fire
-                              review was added to this application
+                              <Info aria-hidden className="size-3.5 shrink-0" />
+                              {thresholdHits.length === 1 ? (
+                                <>
+                                  Over{" "}
+                                  {thresholdHits[0].attendance_threshold!.toLocaleString()}
+                                  , so {thresholdHits[0].name} review was added to this
+                                  application
+                                </>
+                              ) : (
+                                <>
+                                  {thresholdHits
+                                    .map((agency) => agency.name)
+                                    .join(", ")}{" "}
+                                  reviews were added to this application for this
+                                  attendance
+                                </>
+                              )}
                             </span>
                           )}
                         </>

@@ -13,7 +13,6 @@ from pydantic import (
     model_validator,
 )
 
-from app.core.routing import LARGE_EVENT_REQUIRED_AGENCY
 from app.models import ApplicationStatus, EventType, ReviewStatus, ReviewTask
 from app.schemas.review import AuditEventResponse
 
@@ -204,14 +203,15 @@ class SubmitApplicationResponse(BaseModel):
 
     Returning the agency list (rather than only a 200) means the organizer can
     see who was asked to review without a second call, and it makes the
-    attendance override visible: Fire appears on a large event and not on a
-    small one.
+    attendance thresholds visible: an agency whose threshold the attendance
+    exceeds appears here and not on a smaller event.
     """
 
     application: ApplicationResponse
     required_agencies: list[RequiredAgency]
-    # Whether the "over 5,000 attendees" threshold was exceeded. Reported so the
-    # extra Fire review is explainable to the organizer rather than mysterious.
+    # Whether the expected attendance exceeded at least one agency's configured
+    # threshold. Reported so the extra review is explainable rather than
+    # mysterious — the agencies themselves are in `required_agencies`.
     attendance_override_applied: bool = False
 
 

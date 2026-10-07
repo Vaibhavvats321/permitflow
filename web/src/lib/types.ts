@@ -226,23 +226,30 @@ export { PAGE_SIZE } from "./constants";
 /* --- Admin Agencies ------------------------------------------------------- */
 
 /**
- * An agency as the admin endpoints return it: id, name, creation time, and
- * nothing else. There is no active/inactive flag in the contract, so there is
- * none here to render.
+ * An agency as the agency endpoints return it: id, name, creation time, and
+ * its attendance threshold. `attendance_threshold` is null when the agency is
+ * only ever required by the routing matrix; otherwise an expected attendance
+ * strictly above the value makes the agency a required reviewer.
  */
 export interface AgencyResponse {
   id: string;
   name: string;
   created_at: string;
+  attendance_threshold: number | null;
 }
 
 /**
- * Name-only payload for both `POST` and `PATCH /admin/agencies`. The server
- * strips surrounding whitespace and rejects a blank name with a 422, and
- * enforces uniqueness within the tenant with a 409.
+ * Payload for both `POST` and `PATCH /admin/agencies`. The server strips
+ * surrounding whitespace and rejects a blank name with a 422, and enforces
+ * uniqueness within the tenant with a 409.
+ *
+ * `attendance_threshold`: null or omitted means "no attendance rule"; the
+ * server rejects negatives and non-integers with a 422. On PATCH, omitting
+ * the field leaves the current value untouched while an explicit null clears it.
  */
 export interface AgencyWrite {
   name: string;
+  attendance_threshold?: number | null;
 }
 
 /* --- Admin Users ---------------------------------------------------------- */
